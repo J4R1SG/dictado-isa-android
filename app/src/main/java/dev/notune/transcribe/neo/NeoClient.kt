@@ -206,17 +206,19 @@ class NeoClient(
     fun connect(input: String?, portArg: Int? = null): JSONObject {
         val (host, typedPort) = HostFilter.parseAddress(input)?.takeIf { allowHost(it.first) }
             ?: throw NeoError("Esa dirección no es de la red de la clínica. Debe ser como 192.168.x.x.")
-        val explicit = typedPort ?: HostFilter.validPort(portArg) ?: discovered[host]
-        // Same PC as the stored one and no port given: try the port saved for it first. If the PC
-        // went back to the default port, the saved one fails and the default one is tried next.
-        val keptPort = if (explicit == null && store.get(K_HOST) == host)
-            HostFilter.validPort(store.get(K_PORT)?.toIntOrNull()) else null
-        val tries = if (explicit != null) listOf(explicit) else listOfNotNull(keptPort, port).distinct()
+        // Only a port the doctor typed is the one and only try. A port from the page or from the
+        // search, then the port saved for this PC, then the default one are tried in that order:
+        // any of them can be old when the PC went back to another port.
+        val hinted = HostFilter.validPort(portArg) ?: discovered[host]
+        val keptPort = if (store.get(K_HOST) == host) HostFilter.validPort(store.get(K_PORT)?.toIntOrNull()) else null
+        val tries = if (typedPort != null) listOf(typedPort) else listOfNotNull(hinted, keptPort, port).distinct()
         val pin = pin()
         val trust = if (pin != null) PinnedTrust(pin) else CaptureTrust()
         for ((i, p) in tries.withIndex()) {
             val name = try {
-                val r = request(host, "GET", "/api/v1/hola", null, trust, connectMs = 4000, readMs = 4000, port = p)
+                // Later tries wait less, so the page's own time limit is not reached.
+                val ms = if (i == 0) 4000 else 2500
+                val r = request(host, "GET", "/api/v1/hola", null, trust, connectMs = ms, readMs = ms, port = p)
                 (if (r.code == 200) Bridge.parseHello(r.text) else null) ?: throw NeoError(MSG_RED)
             } catch (e: NeoError) {
                 if (e.status == 495) throw e
@@ -224,8 +226,9 @@ class NeoClient(
                 continue
             }
             // The default port is not stored, so a later default keeps working.
-            val keep = if (explicit == null && p == port) null else p.toString()
+            val keep = if (typedPort == null && hinted != p && p == port) null else p.toString()
             store.put(mapOf(K_HOST to host, K_NAME to name.ifEmpty { host }, K_PORT to keep))
+            if (discovered[host] != p) discovered.remove(host) // an old search result
             return JSONObject().put("name", name.ifEmpty { host })
         }
         throw NeoError(MSG_RED)

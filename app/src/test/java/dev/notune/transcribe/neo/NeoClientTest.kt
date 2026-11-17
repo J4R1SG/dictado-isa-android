@@ -209,6 +209,23 @@ class NeoClientTest {
     }
 
     @Test
+    fun oldPortFromThePageFallsBackToTheDefaultPort() {
+        // The page passes the saved port, but the PC went back to the default one.
+        val old = closedPort()
+        store.map[NeoClient.K_HOST] = "127.0.0.1"
+        store.map[NeoClient.K_PORT] = old.toString()
+        assertEquals("PC-PRUEBA", client.connect("127.0.0.1", old).getString("name"))
+        assertEquals(pc.port, client.last()!!.getInt("port"))
+    }
+
+    @Test
+    fun oldSearchResultFallsBackToTheDefaultPort() {
+        client.noteDiscovered("127.0.0.1", closedPort())
+        assertEquals("PC-PRUEBA", client.connect("127.0.0.1").getString("name"))
+        assertEquals(pc.port, client.last()!!.getInt("port"))
+    }
+
+    @Test
     fun typedPortIsNotSwappedForTheDefault() {
         // A port typed by the doctor is the only one tried.
         val e = expectError { client.connect("127.0.0.1:${closedPort()}") }
