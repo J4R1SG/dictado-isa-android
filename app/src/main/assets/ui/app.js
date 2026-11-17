@@ -8,6 +8,8 @@ const CFG = Object.assign({ job: 1200, cola: 2000, hoy: 2500, buscar: 1400, toas
 
 // ---------------------------------------------------------------- utilidades
 const $ = (s) => document.querySelector(s);
+// Una hoja nueva no hace caso a los toques de los primeros instantes: un segundo toque rápido en el mismo lugar caía en el botón de la hoja sin que se leyera.
+const SHEET_GUARD = () => (typeof CFG.sheetGuard === 'number' ? CFG.sheetGuard : (navigator.webdriver ? 0 : 450));
 const ESC = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ESC[c]);
 const MSG_FALLA = 'Algo falló. Intenta otra vez.';
@@ -94,7 +96,9 @@ const isCommon = (low) => COMMON.has(low) || COMMON_SHA256.has(sha256hex(low));
 function mkErr(msg, status) { const e = new Error(msg || MSG_FALLA); e.status = status; return e; }
 // Mensajes de la PC con palabras que la doctora no puede usar («actualiza la app», «PC principal») se dicen más simple.
 const MSG_CIERRA = 'Cierra y abre la app. Si sigue igual, avisa a quien se encarga de Neo Records.';
-const errText = (e) => String((e && e.message) || MSG_FALLA).replace(/Actualiza la app\.?/gi, MSG_CIERRA).replace(/\bLa PC principal\b/g, 'La computadora').replace(/\bla PC principal\b/g, 'la computadora');
+const MSG_OTRA = 'La computadora de la clínica cambió. Si cambiaron la computadora o reinstalaron Neo Records, toca «Olvidar esta computadora».';
+const MSG_NO_ES = 'Esa no es la computadora de la clínica. Busca otra vez. Solo si cambiaron la computadora o reinstalaron Neo Records, toca «Olvidar esta computadora».';
+const errText = (e) => (e && (e.status === 495 || /certificado distinto/i.test(e.message || ''))) ? MSG_OTRA : String((e && e.message) || MSG_FALLA).replace(/Actualiza la app\.?/gi, MSG_CIERRA).replace(/\bLa PC principal\b/g, 'La computadora').replace(/\bla PC principal\b/g, 'la computadora');
 
 // ---------------------------------------------------------------- puente con la app de Android
 let seq = 0;
@@ -143,6 +147,7 @@ async function checkSession(e) {
 }
 function sessionLost() {
   if (S.screen === 'entrar') return;
+  stashNota();                                    // lo escrito y no mandado se guarda (solo en memoria) para cuando la misma persona vuelva a entrar
   S.user = null;
   resetWork();
   S.login = newLogin();
@@ -160,6 +165,23 @@ const S = {
   cid: null, cola: [], cons: null, nota: null, sheet: null, model: { ready: null, name: '', status: '' }, device: '',
   mic: { state: 'idle', err: '' }, aj: { busy: '', err: '' },
 };
+// Lo escrito y no mandado de cada consulta (solo en memoria): no se pierde al cambiar de paciente ni cuando la sesión se cierra a media nota.
+S.keep = {};
+function keepKey(N) { return String(N.day || dayKey(S.day)) + '|' + String(N.cid); }   // el día de la nota, no el que se está mirando
+function stashNota() {
+  const N = S.nota;
+  if (!N || !S.user || noteClosed()) return;
+  const text = String(N.text || '');
+  if (!text.trim() && !N.edit) return;
+  S.keep[keepKey(N)] = { user: S.user.user, text, typing: N.typing, edit: N.edit ? Object.assign({}, N.edit, { busy: false }) : null };
+}
+function unstashNota(N) {
+  const k = S.keep[keepKey(N)];
+  if (!k) return;
+  delete S.keep[keepKey(N)];
+  if (!S.user || k.user !== S.user.user) return;
+  N.text = k.text; N.typing = !!k.typing || !!k.text; N.edit = k.edit;
+}
 const T = { hoy: null, cola: null, job: null, mic: null, toast: null, find: null };
 function clearT(k) { if (T[k]) { clearTimeout(T[k]); T[k] = null; } }
 function resetWork() {
@@ -233,6 +255,8 @@ function startFind(L) {                  // cada búsqueda tiene su número: si 
   T.find = setTimeout(() => { if (L.run === my && L.phase === 'buscando' && S.screen === 'entrar') { L.canManual = true; render(); } }, CFG.manual);
   return my;
 }
+const hostOnly = (h) => { const t = String(h || '').trim().toLowerCase(); return (t.match(/:/g) || []).length === 1 ? t.replace(/:\d+$/, '') : t; };    // con o sin puerto es la misma computadora
+const isRogue = (L, host) => !!L.otra && !!L.lastHost && hostOnly(host) !== hostOnly(L.lastHost);
 async function discover() {
   const L = S.login;
   L.phase = 'buscando'; L.err = ''; L.busy = '';
@@ -244,36 +268,47 @@ async function discover() {
   const wait = CFG.buscar - (Date.now() - t0);
   if (wait > 0) await new Promise((ok) => setTimeout(ok, wait));
   if (S.screen !== 'entrar' || L.run !== my) return;
-  const pcs = (r && Array.isArray(r.pcs)) ? r.pcs : [];
-  const last = r && r.last;
-  L.pcs = pcs;
-  if (pcs.length === 1) return connect(pcs[0].host);
-  if (pcs.length > 1) {
-    const mine = last && pcs.find((p) => p.host === last.host);
-    if (mine) return connect(mine.host);
-    clearT('find'); L.canManual = false; L.phase = 'varias'; render(); return;
+  const pcs = (r && Array.isArray(r.pcs)) ? r.pcs.filter((p) => p && p.host) : [];
+  const last = r && r.last && r.last.host ? r.last : null;
+  L.pcs = pcs; L.hadLast = !!last; L.lastHost = last ? last.host : ''; L.rogue = false;
+  if (last) {
+    // La computadora que ya se conocía va primero, aunque no haya contestado a la búsqueda: otra que conteste no la reemplaza sola.
+    const same = pcs.find((p) => p.host === last.host);
+    const port = (same && same.port) || last.port;
+    const ok = await connect(last.host, { quiet: true, port });
+    if (ok !== false || S.screen !== 'entrar' || L.phase !== 'no' || L.otra) return;      // salió bien, o es una búsqueda vieja, o ya se cambió de pantalla, o la doctora pasó a escribirla, o es otro certificado
+    const otras = pcs.filter((p) => p.host !== last.host);                                 // la que acaba de fallar no se vuelve a ofrecer
+    if (otras.length) { clearT('find'); L.canManual = false; L.err = ''; L.pcs = otras; L.phase = 'varias'; render(); }
+    return;
   }
-  if (last && last.host) return connect(last.host, true);
+  if (pcs.length === 1) return connect(pcs[0].host, { port: pcs[0].port });
+  if (pcs.length > 1) { clearT('find'); L.canManual = false; L.phase = 'varias'; render(); return; }
   clearT('find'); L.canManual = false; L.phase = 'no'; L.err = failed; render();
 }
-async function connect(host, quiet, manual) {
+async function connect(host, o) {
+  o = o || {};
   const L = S.login;
-  L.phase = 'buscando'; L.host = host; L.err = ''; L.busy = 'conectando'; L.otra = false;
+  L.phase = 'buscando'; L.host = host; L.err = ''; L.busy = 'conectando'; L.otra = false; L.rogue = false;
   const my = startFind(L);
   render();
+  const args = { host };
+  if (o.port) args.port = o.port;
+  let ok = false;
   try {
-    const r = await call('connect', { host }, 15000);
-    if (L.run !== my) return;
+    const r = await call('connect', args, 15000);
+    if (L.run !== my) return null;
     S.pc = { host, name: (r && r.name) || host };
-    L.phase = 'form'; L.busy = '';
+    L.phase = 'form'; L.busy = ''; ok = true;
   } catch (e) {
-    if (L.run !== my) return;
-    L.phase = manual ? 'manual' : 'no'; L.busy = '';
+    if (L.run !== my) return null;
+    L.phase = o.manual ? 'manual' : 'no'; L.busy = '';
     L.otra = !!(e && e.status === 495);
-    L.err = (quiet && !L.otra) ? 'No encontré la computadora de la clínica.' : errText(e);
+    L.rogue = isRogue(L, host);       // otra computadora (no la de siempre) con otro certificado: no es la de la clínica
+    L.err = L.rogue ? MSG_NO_ES : (o.quiet && !L.otra) ? 'No encontré la computadora de la clínica.' : errText(e);
   }
   clearT('find'); L.canManual = false;
   render();
+  return ok;
 }
 async function doLogin() {
   const L = S.login;
@@ -286,7 +321,7 @@ async function doLogin() {
     afterLogin();
   } catch (e) {
     // Solo si la PC dijo «contraseña mala» (401, o ese mismo texto si el puente no manda el código) se borra lo escrito; si fue la red o el wifi, no hay que volver a teclearla.
-    L.busy = ''; if (e && (e.status === 401 || /incorrectos/i.test(e.message || ''))) L.pass = ''; L.otra = !!(e && e.status === 495); L.err = errText(e); render();
+    L.busy = ''; if (e && (e.status === 401 || /incorrectos/i.test(e.message || ''))) L.pass = ''; L.otra = !!(e && e.status === 495); L.rogue = L.otra && !!S.pc && isRogue(L, S.pc.host); L.err = L.rogue ? MSG_NO_ES : errText(e); render();
   }
 }
 function policy(pw, user, old, rep) {
@@ -342,7 +377,7 @@ async function loadHoy(refresh) {
   render();
 }
 function goToday() { S.day = new Date(); S.todayKey = dayKey(S.day); S.hoy.rows = null; S.cola = []; loadHoy(false); }
-function rescanHoy() { S.user = null; resetWork(); S.login = newLogin(); S.login.notice = 'Busquemos la computadora otra vez.'; replace('entrar'); discover(); }
+function rescanHoy() { S.keep = {}; S.user = null; resetWork(); S.login = newLogin(); S.login.notice = 'Busquemos la computadora otra vez.'; replace('entrar'); discover(); }
 function moveDay(n) { const d = new Date(S.day); d.setDate(d.getDate() + n); S.day = d; S.hoy.rows = null; S.cola = []; loadHoy(false); }
 
 // ---------------------------------------------------------------- consulta (lo que hay en Neo)
@@ -478,7 +513,7 @@ const SECTION_KEY = { S: 'subjective', A: 'assessment', P: 'plan_items', Anestes
 const LIST_SEC = { A: 1, P: 1, Anestesia: 1, Home: 1 };
 
 function newNota(id) {
-  return { cid: id, c: null, draft: null, turn: null, loaded: false, loading: true, err: '', busy: '', last: null, target: null, localQ: null, skip: [], text: '', typing: false,
+  return { cid: id, day: dayKey(S.day), c: null, draft: null, turn: null, loaded: false, loading: true, err: '', busy: '', last: null, target: null, localQ: null, skip: [], text: '', typing: false,
     edit: null, changed: [], saving: {}, finishing: false, finished: false, finishErr: '', saveErr: {}, warn: {}, job: 0, jobLost: false, sentRaw: null, snap: '' };
 }
 async function openNota() {
@@ -486,7 +521,9 @@ async function openNota() {
   if (!c || !canInterview(c)) return;
   const old = S.nota;
   if (old && old.loaded && String(old.cid) === String(S.cid) && !noteClosed()) { go('nota'); refreshNota(); return; }    // la misma consulta: no se pierde lo escrito ni lo saltado
+  stashNota();
   S.nota = newNota(S.cid);
+  unstashNota(S.nota);
   go('nota');
   loadNota();
 }
@@ -568,12 +605,24 @@ function startJob(payload, retry) {
   const N = S.nota;
   const body = Object.assign({ date: dayKey(S.day), id: N.cid, answer_es: '', target: null, skip: N.skip.slice(), edits: {}, start: false }, payload);
   N.last = body; N.busy = 'ia'; N.err = ''; N.job = 0; N.jobLost = false; N.failSince = 0;
-  if (!retry) N.snap = snapText(N);
+  if (!retry) { N.snap = snapText(N); N.dirty = false; N.refusedRaw = null; }
   render();
   api('POST', '/api/v1/entrevista', body).then((r) => { N.job = r.job; pollJob(N, r.job, 0); }).catch((e) => {
     if (S.nota !== N || e.handled) return;
+    if (e.status) { N.refusedRaw = N.sentRaw; N.sentRaw = null; }                 // la PC contestó que no (409, 429...): esa respuesta no se mandó, el texto de la doctora se queda en el cuadro
     N.busy = ''; N.err = errText(e); render();
   });
+}
+// Si la doctora editó o guardó una tarjeta después de que empezó este trabajo, el borrador que trae la respuesta es viejo: se pide el de ahora y no se pisa lo que cambió.
+async function freshTurn(N, turn) {
+  if (!N.dirty) { applyTurn(turn); return; }
+  let t = turn;
+  try {
+    const br = await api('GET', '/api/v1/borrador?date=' + dayKey(S.day) + '&id=' + encodeURIComponent(N.cid));
+    if (S.nota !== N) return;
+    if (br && br.draft) t = Object.assign({}, turn, { draft: br.draft });
+  } catch (e) { if (S.nota !== N) return; t = Object.assign({}, turn, { draft: N.draft || turn.draft }); }
+  applyTurn(t, true);
 }
 function pollJob(N, job, fails) {
   clearT('job');
@@ -587,7 +636,7 @@ function pollJob(N, job, fails) {
       N.failSince = 0;
       if (r.status === 'trabajando') return pollJob(N, job, 0);
       N.job = 0;
-      if (r.status === 'listo' && r.turn) { afterSent(N); applyTurn(r.turn); return; }
+      if (r.status === 'listo' && r.turn) { afterSent(N); await freshTurn(N, r.turn); return; }
       N.busy = ''; N.err = r.error || 'La IA no respondió. Toca Reintentar.'; render();
     } catch (e) {
       if (S.nota !== N || e.handled) return;
@@ -609,8 +658,10 @@ async function retryJob() {
   try {                                                         // ¿la PC ya procesó esa respuesta y solo se perdió el aviso? entonces no se manda dos veces
     const br = await api('GET', '/api/v1/borrador?date=' + dayKey(S.day) + '&id=' + encodeURIComponent(N.cid));
     if (S.nota !== N) return;
-    if (br.turn && br.draft && JSON.stringify(br.draft.text_es || {}) !== N.snap) { N.job = 0; afterSent(N); applyTurn(br.turn); return; }
+    if (br.turn && br.draft && JSON.stringify(br.draft.text_es || {}) !== N.snap) { N.job = 0; N.refusedRaw = null; afterSent(N); applyTurn(N.dirty ? Object.assign({}, br.turn, { draft: br.draft }) : br.turn, !!N.dirty); return; }
   } catch (e) { if (S.nota !== N || e.handled) return; N.busy = ''; N.err = errText(e); render(); return; }
+  if (N.sentRaw == null && N.refusedRaw != null) N.sentRaw = N.refusedRaw;      // se vuelve a mandar la misma respuesta: ahora sí se puede quitar del cuadro
+  N.refusedRaw = null;
   startJob(N.last, true);
 }
 function sendAnswer(text, opts) {
@@ -702,7 +753,7 @@ async function saveEdit() {
   try {
     const r = await api('POST', '/api/v1/editar', { date: dayKey(S.day), id: N.cid, edits: { [e.sec]: val } });
     if (r.draft) { N.draft = r.draft; if (N.turn) { N.turn.draft = r.draft; if (N.turn.preview) delete N.turn.preview[e.sec]; } }
-    N.edit = null;
+    N.edit = null; N.dirty = true;
   } catch (x) { if (x.handled) return; e.busy = false; e.err = errText(x); }
   render();
 }
@@ -717,8 +768,17 @@ async function saveSection(sec) {
     const r = await api('POST', '/api/v1/guardar-seccion', { date: dayKey(S.day), id: N.cid, section: sec });
     addLocalCola(r.qid, sec);
     if (r.warning) N.warn[sec] = r.warning;
+    N.dirty = true;
     refreshNota();
-  } catch (e) { if (!e.handled) N.saveErr[sec] = errText(e); }
+  } catch (e) {
+    if (!e.handled) {
+      // Se perdió la respuesta o la PC dice que ya estaba guardada: la PC pudo haberla puesto en cola. Se mira cómo quedó antes de mostrar un error.
+      if (!(e.status === 409 && /ya está guardada/i.test(e.message || ''))) N.saveErr[sec] = errText(e);
+      N.dirty = true;
+      await refreshNota();
+      if (S.nota === N) { ensureCola(true); if (secState(sec).locked) N.saveErr[sec] = ''; }
+    }
+  }
   N.saving[sec] = false; render();
 }
 function askFinish() {
@@ -807,11 +867,13 @@ async function doForget() {
   let err = '';
   try { await call('forget', {}, 15000); } catch (e) { err = errText(e); }
   S.aj.busy = '';
+  if (!err) S.keep = {};
   if (err) { if (S.screen === 'ajustes') S.aj.err = err; else S.login.err = err; render(); return; }
   S.user = null; S.pc = null; resetWork(); S.login = newLogin(); replace('entrar'); toast('Listo. Ahora busco la computadora otra vez.'); discover();
 }
 function askLogout() { S.sheet = { type: 'confirm', title: 'Salir de la cuenta', text: 'Tendrás que entrar otra vez con tu usuario y contraseña.', ok: 'Sí, salir', act: 'doLogout', cancel: 'Quedarme' }; render(); }
 async function doLogout() {
+  S.keep = {};
   S.sheet = null; S.aj.busy = 'Saliendo…'; render();
   try { await call('logout', {}, 15000); } catch (e) { /* aun así se sale de la pantalla */ }
   S.aj.busy = ''; S.user = null; resetWork(); S.login = newLogin(); replace('entrar'); discover();
@@ -836,8 +898,12 @@ const topBar = (o) => '<div class="top-l">' + (o.back ? '<button class="icon-btn
 
 function vBoot() { return { top: topBar({ title: 'Neo Records' }), main: '<div class="wait">' + spin('big') + '<span>Abriendo…</span></div>' }; }
 
+const FORGET_BTN = (cls) => '<button class="btn ' + cls + ' block" data-act="askForget">Olvidar esta computadora</button>';
 function vEntrar() {
   const L = S.login;
+  // «Olvidar» es la acción principal solo cuando la de siempre cambió de certificado; si fue otra computadora, queda al final y sin color.
+  const forgetFirst = () => (L.otra && !L.rogue ? FORGET_BTN('primary') : '');
+  const forgetLast = () => (L.otra && L.rogue ? FORGET_BTN('ghost') : '');
   let main = '', bar = '';
   const notice = L.notice ? '<div class="msg warn">' + ic('alert') + '<span>' + esc(L.notice) + '</span></div>' : '';
   if (L.phase === 'buscando') {
@@ -846,18 +912,18 @@ function vEntrar() {
       '<p class="muted center">Tu teléfono tiene que estar en el wifi de la clínica.</p>';
     if (L.canManual) bar = '<button class="btn ghost block" data-act="manual">Escribir la dirección a mano</button>';
   } else if (L.phase === 'varias') {
-    main = notice + '<h1>Elige la computadora</h1><p class="muted">Encontré más de una. Toca la de la clínica.</p><div class="pcs">' +
+    main = notice + '<h1>Elige la computadora</h1><p class="muted">' + (L.hadLast ? 'No encontré la computadora de siempre. Encontré ' + (L.pcs.length === 1 ? 'esta otra' : 'estas otras') + '. Toca la de la clínica solo si la reconoces.' : 'Encontré más de una. Toca la de la clínica.') + '</p><div class="pcs">' +
       L.pcs.map((p) => '<button class="btn ghost block" data-act="pick" data-host="' + esc(p.host) + '">' + ic('wifi') + esc(p.name || p.host) + '</button>').join('') + '</div>';
     bar = '<button class="btn ghost block" data-act="rescan">Buscar otra vez</button>';
   } else if (L.phase === 'no') {
-    main = notice + '<h1>No encontré la computadora</h1>' + (L.err ? '<div class="msg err">' + ic('alert') + '<span>' + esc(L.err) + '</span></div>' : '') +
-      '<div class="card flat"><p><b>Revisa estas tres cosas:</b></p><ul><li>La computadora de la clínica está prendida.</li><li>Neo Records está abierto en ella.</li><li>Tu teléfono está en el wifi de la clínica.</li></ul></div>';
-    bar = (L.otra ? '<button class="btn primary block" data-act="askForget">Olvidar esta computadora</button>' : '') + '<button class="btn ' + (L.otra ? 'ghost' : 'primary') + ' block" data-act="rescan">Buscar otra vez</button><button class="btn ghost block" data-act="manual">Escribir la dirección a mano</button>';
+    main = notice + '<h1>' + (L.rogue ? 'Esa no es la computadora de la clínica' : L.otra ? 'La computadora cambió' : 'No encontré la computadora') + '</h1>' + (L.err ? '<div class="msg err">' + ic('alert') + '<span>' + esc(L.err) + '</span></div>' : '') +
+      (L.otra ? '' : '<div class="card flat"><p><b>Revisa estas tres cosas:</b></p><ul><li>La computadora de la clínica está prendida.</li><li>Neo Records está abierto en ella.</li><li>Tu teléfono está en el wifi de la clínica.</li></ul></div>');
+    bar = forgetFirst() + '<button class="btn ' + (L.otra && !L.rogue ? 'ghost' : 'primary') + ' block" data-act="rescan">Buscar otra vez</button>' + '<button class="btn ghost block" data-act="manual">Escribir la dirección a mano</button>' + forgetLast();
   } else if (L.phase === 'manual') {
     main = '<h1>Dirección de la computadora</h1><p class="muted">Pídesela a quien se encarga de la computadora. Son números separados por puntos (a veces con dos puntos y otro número al final).</p>' +
       (L.err ? '<div class="msg err">' + ic('alert') + '<span>' + esc(L.err) + '</span></div>' : '') +
       '<label class="field"><span>Dirección</span><input class="input" id="hostIn" data-bind="login.hostInput" value="' + esc(L.hostInput) + '" inputmode="decimal" autocomplete="off" autocapitalize="none" spellcheck="false"></label>';
-    bar = (L.otra ? '<button class="btn primary block" data-act="askForget">Olvidar esta computadora</button>' : '') + '<button class="btn ' + (L.otra ? 'ghost' : 'primary') + ' block" data-act="connectManual">Conectar</button><button class="btn ghost block" data-act="rescan">Buscar sola otra vez</button>';
+    bar = forgetFirst() + '<button class="btn ' + (L.otra && !L.rogue ? 'ghost' : 'primary') + ' block" data-act="connectManual">Conectar</button><button class="btn ghost block" data-act="rescan">Buscar sola otra vez</button>' + forgetLast();
   } else {
     const busy = L.busy === 'entrando';
     main = notice + '<div class="msg ok">' + ic('check') + '<span>Encontré la computadora <b>' + esc(S.pc ? S.pc.name : '') + '</b>.</span></div>' +
@@ -867,7 +933,7 @@ function vEntrar() {
       '<button class="icon-btn" data-act="showPw" type="button" aria-label="' + (L.show ? 'Ocultar la contraseña' : 'Ver la contraseña') + '" aria-pressed="' + L.show + '">' + ic(L.show ? 'eyeoff' : 'eye') + '</button></span></label>' +
       '<p class="hint">Si olvidaste tu contraseña, pídele a quien se encarga de Neo Records que la reinicie en la computadora.</p>';
     bar = '<button class="btn primary block" id="loginBtn" data-act="login"' + ((busy || !L.user.trim() || !L.pass) ? ' disabled' : '') + '>' + (busy ? spin() + 'Entrando…' : 'Entrar') + '</button>' +
-      (busy ? '' : (L.otra ? '<button class="btn primary block" data-act="askForget">Olvidar esta computadora</button>' : '') + '<button class="btn ghost block" data-act="rescan">Buscar la computadora otra vez</button>');
+      (busy ? '' : forgetFirst() + '<button class="btn ghost block" data-act="rescan">Buscar la computadora otra vez</button>' + forgetLast());
   }
   return { top: topBar({ title: 'Neo Records', sub: S.pc && S.login.phase === 'form' ? S.pc.name : '' }), main, bar };
 }
@@ -1164,6 +1230,8 @@ function sheetHtml() {
 
 // ---------------------------------------------------------------- dibujar
 const VIEWS = { boot: vBoot, entrar: vEntrar, clave: vClave, hoy: vHoy, consulta: vConsulta, nota: vNota, revisar: vRevisar, ajustes: vAjustes };
+let sheetSeen = null, sheetAt = 0;
+const sheetFresh = () => !!S.sheet && SHEET_GUARD() > 0 && Date.now() - sheetAt < SHEET_GUARD();
 function render() {
   const main = $('#main'), bar = $('#bar'), wrap = $('#sheetWrap');
   const ae = document.activeElement;
@@ -1180,6 +1248,7 @@ function render() {
   main.scrollTop = S.scrollTop ? 0 : top;
   S.scrollTop = false;
   if (S.scrollTo) { const el = document.getElementById(S.scrollTo); if (el) { S.scrollTo = null; const bn = main.querySelector('.banner'); main.scrollTo({ top: main.scrollTop + el.getBoundingClientRect().top - (bn ? bn.getBoundingClientRect().bottom : main.getBoundingClientRect().top) - 8, behavior: 'instant' }); } }
+  if (S.sheet !== sheetSeen) { sheetSeen = S.sheet; sheetAt = Date.now(); }      // una hoja nueva (o cambiada por otra) empieza a contar sus instantes sin toques
   wrap.innerHTML = sheetHtml();
   wrap.hidden = !S.sheet;
   if (S.sheet) { const f = wrap.querySelector('button'); if (f && !wrap.contains(document.activeElement)) f.focus(); }
@@ -1197,8 +1266,8 @@ function setPath(path, value) {
 }
 const ACTIONS = {
   back, closeSheet,
-  pick(d) { connect(d.host); }, rescan() { S.login.hostInput = ''; discover(); }, manual() { const L = S.login; L.run++; clearT('find'); L.canManual = false; L.busy = ''; L.phase = 'manual'; L.err = ''; render(); },
-  connectManual() { const h = S.login.hostInput.trim(); if (!h) { S.login.err = 'Escribe la dirección de la computadora.'; render(); return; } connect(h, false, true); },
+  pick(d) { const p = S.login.pcs.find((x) => x.host === d.host); connect(d.host, { port: p && p.port }); }, rescan() { S.login.hostInput = ''; discover(); }, manual() { const L = S.login; L.run++; clearT('find'); L.canManual = false; L.busy = ''; L.phase = 'manual'; L.err = ''; render(); },
+  connectManual() { const h = S.login.hostInput.trim(); if (!h) { S.login.err = 'Escribe la dirección de la computadora.'; render(); return; } connect(h, { manual: true }); },
   showPw() { S.login.show = !S.login.show; render(); }, login: doLogin,
   showCp() { S.cp.show = !S.cp.show; render(); }, doCp: doChangePw,
   prevDay() { moveDay(-1); }, nextDay() { moveDay(1); }, refresh() { loadHoy(true); }, reload() { loadHoy(false); }, ajustes() { go('ajustes'); },
@@ -1212,7 +1281,7 @@ const ACTIONS = {
   skip: skipQuestion, retry: retryJob, reloadNota: loadNota,
   edit(d) { startEdit(d.sec); }, editOk: saveEdit, editCancel() { if (S.nota.edit && S.nota.edit.busy) return; S.nota.edit = null; render(); },
   oState(d) { const e = S.nota.edit; const cur = e.rows[d.row] || { state: '', note: '' }; e.rows[d.row] = { state: cur.state === d.state ? '' : d.state, note: cur.note }; render(); },
-  save(d) { saveSection(d.sec); }, askFinish, doFinish, revisar() { if (S.nota) go('revisar'); }, home() { S.nota = null; S.cons = null; goHoy(); },
+  save(d) { saveSection(d.sec); }, askFinish, doFinish, revisar() { if (S.nota) go('revisar'); }, home() { stashNota(); S.nota = null; S.cons = null; goHoy(); },
   mic: micTap, micCancel, toggleType() { const N = S.nota; N.typing = !N.typing; render(); if (N.typing) { const a = $('#ans'); if (a) a.focus(); } },
   send() { const N = S.nota; const t = N.text; if (String(t).trim()) sendAnswer(t, { fromBox: true }); }, clearText() { S.nota.text = ''; S.nota.typing = false; render(); },
   sugs() { S.sheet = { type: 'sugs' }; render(); },
@@ -1232,10 +1301,11 @@ document.addEventListener('click', (e) => {
   const t = e.target.closest('[data-act]');
   if (!t || t.disabled || t.getAttribute('aria-disabled') === 'true') return;
   if (S.sheet && !t.closest('#sheetWrap') && t.dataset.act !== 'closeSheet') return;
+  if (sheetFresh()) return;
   const f = ACTIONS[t.dataset.act];
   if (f) f(t.dataset, t);
 });
-document.addEventListener('click', (e) => { if (e.target.id === 'sheetWrap') { S.sheet = null; render(); } });
+document.addEventListener('click', (e) => { if (e.target.id === 'sheetWrap' && !sheetFresh()) { S.sheet = null; render(); } });
 document.addEventListener('input', (e) => {
   const el = e.target, b = el.dataset && el.dataset.bind;
   if (!b) return;
