@@ -22,8 +22,8 @@ android {
         applicationId = "dev.j4r1sg.dictado"
         minSdk = 26
         targetSdk = 36
-        versionCode = 102
-        versionName = "1.0.0-beta.3"
+        versionCode = 103
+        versionName = "1.0.0-beta.4"
         ndk {
             abiFilters += targetAbis
         }

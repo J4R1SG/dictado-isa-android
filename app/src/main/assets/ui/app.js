@@ -171,16 +171,29 @@ function keepKey(N) { return String(N.day || dayKey(S.day)) + '|' + String(N.cid
 function stashNota() {
   const N = S.nota;
   if (!N || !S.user || noteClosed()) return;
-  const text = String(N.text || '');
+  let text = String(N.text || '');
+  let unsure = null;
+  if (N.sentRaw != null) {
+    const sent = String(N.sentRaw);
+    if (N.sentOk) text = text === sent ? '' : text.startsWith(sent) ? text.slice(sent.length).trim() : text;     // la PC confirmó que la tiene (la IA aún piensa): no se guarda, o volvería al cuadro y se mandaría dos veces
+    else if (text.trim()) unsure = { sent, snap: N.snap };                                                         // no se sabe si llegó (falló el wifi): se guarda todo y al reabrir se compara con el borrador de la PC
+  }
   if (!text.trim() && !N.edit) return;
-  S.keep[keepKey(N)] = { user: S.user.user, text, typing: N.typing, edit: N.edit ? Object.assign({}, N.edit, { busy: false }) : null };
+  S.keep[keepKey(N)] = { user: S.user.user, text, typing: N.typing, unsure, edit: N.edit ? Object.assign({}, N.edit, { busy: false }) : null };
 }
 function unstashNota(N) {
   const k = S.keep[keepKey(N)];
   if (!k) return;
   delete S.keep[keepKey(N)];
   if (!S.user || k.user !== S.user.user) return;
-  N.text = k.text; N.typing = !!k.typing || !!k.text; N.edit = k.edit;
+  N.text = k.text; N.typing = !!k.typing || !!k.text; N.edit = k.edit; N.unsure = k.unsure || null;
+}
+function settleUnsure(N) {                // la PC ¿usó la respuesta que se guardó sin saber si llegó? si el borrador cambió, sí: se quita del cuadro
+  const u = N.unsure; N.unsure = null;
+  if (!u || !N.draft || JSON.stringify(N.draft.text_es || {}) === u.snap) return;
+  const t = String(N.text || '');
+  if (t === u.sent) { N.text = ''; N.typing = false; }
+  else if (t.startsWith(u.sent)) N.text = t.slice(u.sent.length).trim();
 }
 const T = { hoy: null, cola: null, job: null, mic: null, toast: null, find: null };
 function clearT(k) { if (T[k]) { clearTimeout(T[k]); T[k] = null; } }
@@ -256,7 +269,7 @@ function startFind(L) {                  // cada búsqueda tiene su número: si 
   return my;
 }
 const hostOnly = (h) => { const t = String(h || '').trim().toLowerCase(); return (t.match(/:/g) || []).length === 1 ? t.replace(/:\d+$/, '') : t; };    // con o sin puerto es la misma computadora
-const isRogue = (L, host) => !!L.otra && !!L.lastHost && hostOnly(host) !== hostOnly(L.lastHost);
+const isRogue = (L, host) => !!L.otra && (!L.lastHost || hostOnly(host) !== hostOnly(L.lastHost));      // sin saber cuál es la de siempre, otro certificado se trata como ajena (lo seguro)
 async function discover() {
   const L = S.login;
   L.phase = 'buscando'; L.err = ''; L.busy = '';
@@ -265,6 +278,7 @@ async function discover() {
   const t0 = Date.now();
   let r = null, failed = '';
   try { r = await call('discover', {}, 12000); } catch (e) { failed = errText(e); }
+  if (r && r.last && r.last.host) L.lastHost = r.last.host;       // aunque esta búsqueda ya no valga, se sabe cuál es la de siempre
   const wait = CFG.buscar - (Date.now() - t0);
   if (wait > 0) await new Promise((ok) => setTimeout(ok, wait));
   if (S.screen !== 'entrar' || L.run !== my) return;
@@ -321,7 +335,8 @@ async function doLogin() {
     afterLogin();
   } catch (e) {
     // Solo si la PC dijo «contraseña mala» (401, o ese mismo texto si el puente no manda el código) se borra lo escrito; si fue la red o el wifi, no hay que volver a teclearla.
-    L.busy = ''; if (e && (e.status === 401 || /incorrectos/i.test(e.message || ''))) L.pass = ''; L.otra = !!(e && e.status === 495); L.rogue = L.otra && !!S.pc && isRogue(L, S.pc.host); L.err = L.rogue ? MSG_NO_ES : errText(e); render();
+    // aquí ya se conectó a S.pc.host con éxito: sin pista de otra computadora, es la misma
+    L.busy = ''; if (e && (e.status === 401 || /incorrectos/i.test(e.message || ''))) L.pass = ''; L.otra = !!(e && e.status === 495); L.rogue = L.otra && !!S.pc && !!L.lastHost && isRogue(L, S.pc.host); L.err = L.rogue ? MSG_NO_ES : errText(e); render();
   }
 }
 function policy(pw, user, old, rep) {
@@ -377,7 +392,7 @@ async function loadHoy(refresh) {
   render();
 }
 function goToday() { S.day = new Date(); S.todayKey = dayKey(S.day); S.hoy.rows = null; S.cola = []; loadHoy(false); }
-function rescanHoy() { S.keep = {}; S.user = null; resetWork(); S.login = newLogin(); S.login.notice = 'Busquemos la computadora otra vez.'; replace('entrar'); discover(); }
+function rescanHoy() { stashNota(); S.user = null; resetWork(); S.login = newLogin(); S.login.notice = 'Busquemos la computadora otra vez.'; replace('entrar'); discover(); }
 function moveDay(n) { const d = new Date(S.day); d.setDate(d.getDate() + n); S.day = d; S.hoy.rows = null; S.cola = []; loadHoy(false); }
 
 // ---------------------------------------------------------------- consulta (lo que hay en Neo)
@@ -514,7 +529,7 @@ const LIST_SEC = { A: 1, P: 1, Anestesia: 1, Home: 1 };
 
 function newNota(id) {
   return { cid: id, day: dayKey(S.day), c: null, draft: null, turn: null, loaded: false, loading: true, err: '', busy: '', last: null, target: null, localQ: null, skip: [], text: '', typing: false,
-    edit: null, changed: [], saving: {}, finishing: false, finished: false, finishErr: '', saveErr: {}, warn: {}, job: 0, jobLost: false, sentRaw: null, snap: '' };
+    edit: null, changed: [], saving: {}, finishing: false, finished: false, finishErr: '', saveErr: {}, warn: {}, job: 0, jobLost: false, sentRaw: null, sentOk: false, unsure: null, snap: '' };
 }
 async function openNota() {
   const c = S.cons && S.cons.c;
@@ -537,6 +552,7 @@ async function loadNota() {
     ]);
     if (S.nota !== N) return;
     N.c = cr.c; N.draft = br.draft || null; N.loading = false; N.loaded = true;
+    settleUnsure(N);
     S.cola = S.cola.filter((it) => String(it.cid) !== String(N.cid)).concat(Array.isArray(cr.c.cola) ? cr.c.cola : []);
     modelStatus();
     if (N.draft && N.draft.terminada) { N.finished = true; if (br.turn) N.turn = br.turn; replace('revisar'); return; }    // ya se terminó: la PC no deja cambiar nada
@@ -601,13 +617,14 @@ function afterSent(N) {                 // lo que escribió la doctora mientras 
   if (t === sent) { N.text = ''; N.typing = false; }
   else if (t.startsWith(sent)) N.text = t.slice(sent.length).trim();
 }
+function unsend(N) { if (N.sentRaw != null) { N.refusedRaw = N.sentRaw; N.sentRaw = null; } N.sentOk = false; }      // el trabajo acabó mal: la IA no usó esa respuesta, sigue siendo texto sin mandar (Reintentar la vuelve a mandar)
 function startJob(payload, retry) {
   const N = S.nota;
   const body = Object.assign({ date: dayKey(S.day), id: N.cid, answer_es: '', target: null, skip: N.skip.slice(), edits: {}, start: false }, payload);
-  N.last = body; N.busy = 'ia'; N.err = ''; N.job = 0; N.jobLost = false; N.failSince = 0;
+  N.last = body; N.busy = 'ia'; N.err = ''; N.job = 0; N.jobLost = false; N.failSince = 0; N.sentOk = false;
   if (!retry) { N.snap = snapText(N); N.dirty = false; N.refusedRaw = null; }
   render();
-  api('POST', '/api/v1/entrevista', body).then((r) => { N.job = r.job; pollJob(N, r.job, 0); }).catch((e) => {
+  api('POST', '/api/v1/entrevista', body).then((r) => { N.job = r.job; N.sentOk = true; pollJob(N, r.job, 0); }).catch((e) => {
     if (S.nota !== N || e.handled) return;
     if (e.status) { N.refusedRaw = N.sentRaw; N.sentRaw = null; }                 // la PC contestó que no (409, 429...): esa respuesta no se mandó, el texto de la doctora se queda en el cuadro
     N.busy = ''; N.err = errText(e); render();
@@ -637,6 +654,7 @@ function pollJob(N, job, fails) {
       if (r.status === 'trabajando') return pollJob(N, job, 0);
       N.job = 0;
       if (r.status === 'listo' && r.turn) { afterSent(N); await freshTurn(N, r.turn); return; }
+      unsend(N);
       N.busy = ''; N.err = r.error || 'La IA no respondió. Toca Reintentar.'; render();
     } catch (e) {
       if (S.nota !== N || e.handled) return;
@@ -644,7 +662,7 @@ function pollJob(N, job, fails) {
         if (!N.failSince) N.failSince = t1;
         if ((fails || 0) < 4 && Date.now() - N.failSince < 30000) return pollJob(N, job, (fails || 0) + 1);      // se insiste unos segundos, no minutos
         N.failSince = 0; N.jobLost = true;
-      } else N.job = 0;
+      } else { N.job = 0; unsend(N); }
       N.busy = ''; N.err = errText(e); render();
     }
   }, fails ? 2000 : CFG.job);
