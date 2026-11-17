@@ -88,8 +88,8 @@ public class ModelsActivity extends AppCompatActivity {
                     "https://huggingface.co/handy-computer/whisper-small-gguf/resolve/main/whisper-small-Q8_0.gguf"),
             new ModelLink("Nemotron 3.5 Streaming 0.6B", R.string.model_desc_nemotron, "473 MB",
                     "https://huggingface.co/handy-computer/nemotron-3.5-asr-streaming-0.6b-gguf/resolve/main/nemotron-3.5-asr-streaming-0.6b-Q4_K_M.gguf"),
-            new ModelLink("Parakeet TDT 0.6B v3 Q8", R.string.model_desc_parakeet_v3_q8, "740 MB",
-                    "https://huggingface.co/handy-computer/parakeet-tdt-0.6b-v3-gguf/resolve/main/parakeet-tdt-0.6b-v3-Q8_0.gguf"),
+            new ModelLink("Parakeet Ultra Q8", R.string.model_desc_parakeet_ultra_q8, "740 MB",
+                    "https://huggingface.co/handy-computer/parakeet-ultra-gguf/resolve/main/parakeet-ultra-Q8_0.gguf"),
             new ModelLink("Whisper Large-v3-Turbo", R.string.model_desc_whisper_turbo, "845 MB",
                     "https://huggingface.co/handy-computer/whisper-large-v3-turbo-gguf/resolve/main/whisper-large-v3-turbo-Q8_0.gguf"),
             new ModelLink("huggingface.co/handy-computer", R.string.model_desc_browse, "",
@@ -449,8 +449,9 @@ public class ModelsActivity extends AppCompatActivity {
                 if (success) {
                     snackbar(getString(R.string.models_import_done, name));
                     String before = ModelStore.activeModel(this);
+                    // A freshly imported model is the one the user wants to dictate with.
+                    ModelStore.setActiveModel(this, dest.getName());
                     refreshList();
-                    // Without a bundled model, the first import becomes active.
                     if (!before.equals(ModelStore.activeModel(this))) {
                         setStatus(getString(R.string.models_loading));
                         reloadModelNative(this);

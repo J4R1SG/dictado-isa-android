@@ -89,14 +89,15 @@ pub fn extract_builtin_model(env: &mut JNIEnv, context: &JObject) -> anyhow::Res
     let model_dir = base_path.join(BUILTIN_MODEL_DIR);
     let marker_file = model_dir.join(EXTRACTION_COMPLETE_MARKER);
 
-    // The marker only ever appears together with a complete directory.
-    if marker_file.exists() {
+    // The marker only ever appears together with a complete directory. An
+    // app update may bundle a different model; then the old copy is replaced.
+    if marker_file.exists() && extracted_is_current(env, context, &model_dir) {
         return find_gguf(&model_dir);
     }
 
     let _lock = ExtractionLock::acquire(&base_path.join(EXTRACTION_LOCK))?;
     // Another process may have finished extracting while we waited.
-    if marker_file.exists() {
+    if marker_file.exists() && extracted_is_current(env, context, &model_dir) {
         return find_gguf(&model_dir);
     }
 
@@ -129,6 +130,32 @@ pub fn extract_builtin_model(env: &mut JNIEnv, context: &JObject) -> anyhow::Res
     log::info!("Asset extraction complete");
 
     find_gguf(&model_dir)
+}
+
+/// True if the extracted GGUF is the one this APK bundles. After an update
+/// that ships a different model, the old extraction must not be reused. If
+/// the assets can't be listed, the working extraction is kept.
+fn extracted_is_current(env: &mut JNIEnv, context: &JObject, model_dir: &Path) -> bool {
+    let Ok(found) = find_gguf(model_dir) else {
+        return false;
+    };
+    let Some(name) = found.file_name().and_then(|n| n.to_str()) else {
+        return false;
+    };
+    match list_builtin_assets(env, context) {
+        Ok(names) => {
+            let current = names.iter().any(|n| n == name);
+            if !current {
+                log::info!("Bundled model changed ({} is outdated); re-extracting", name);
+            }
+            current
+        }
+        Err(e) => {
+            let _ = env.exception_clear();
+            log::warn!("cannot list bundled model assets: {}", e);
+            true
+        }
+    }
 }
 
 /// Copies the bundled model into `tmp_root` and marks it complete; returns

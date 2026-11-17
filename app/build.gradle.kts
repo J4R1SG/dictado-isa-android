@@ -22,8 +22,8 @@ android {
         applicationId = "dev.j4r1sg.dictado"
         minSdk = 26
         targetSdk = 36
-        versionCode = 103
-        versionName = "1.0.0-beta.4"
+        versionCode = 104
+        versionName = "1.0.0-beta.5"
         ndk {
             abiFilters += targetAbis
         }
@@ -232,14 +232,20 @@ data class ModelFile(val name: String, val sha256: String)
 // The bundled GGUF goes into the model_assets asset pack so the base module
 // stays under the Play Store 200 MB compressed-download limit.
 val modelPackFiles = listOf(
-    ModelFile("parakeet-tdt-0.6b-v3-Q4_K_M.gguf",
-        "b68557be1e3c40207fd7c4bd9d63f1d3316b963f15325bfb0cc16a8bb0ffd181"),
+    ModelFile("parakeet-ultra-Q4_K_M.gguf",
+        "c69b7a5f9071a7afd8a1818ef7ae542c386c4b01ed0cac380c19a99947646bf9"),
 )
 
-val huggingFaceRepo = "https://huggingface.co/handy-computer/parakeet-tdt-0.6b-v3-gguf/resolve/main"
+val huggingFaceRepo = "https://huggingface.co/handy-computer/parakeet-ultra-gguf/resolve/main"
 
 fun downloadToDir(assetsDir: File, files: List<ModelFile>) {
     assetsDir.mkdirs()
+    // A model from an earlier build would otherwise be packed next to the new one.
+    val wanted = files.map { it.name }.toSet()
+    assetsDir.listFiles()?.filter { it.name.endsWith(".gguf") && it.name !in wanted }?.forEach {
+        println("  - removing old ${it.name}")
+        it.delete()
+    }
     files.forEach { model ->
         val destFile = File(assetsDir, model.name)
         if (destFile.exists() && model.sha256.isNotEmpty()) {

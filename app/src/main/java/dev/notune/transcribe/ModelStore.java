@@ -27,10 +27,10 @@ public final class ModelStore {
     public static final String NO_MODEL_STATUS = "Error: no speech model installed";
 
     /** The bundled model, offered as the first download when it isn't bundled. */
-    public static final String RECOMMENDED_NAME = "Parakeet TDT 0.6B v3";
-    public static final String RECOMMENDED_SIZE = "485 MB";
+    public static final String RECOMMENDED_NAME = "Parakeet Ultra";
+    public static final String RECOMMENDED_SIZE = "486 MB";
     public static final String RECOMMENDED_URL =
-            "https://huggingface.co/handy-computer/parakeet-tdt-0.6b-v3-gguf/resolve/main/parakeet-tdt-0.6b-v3-Q4_K_M.gguf";
+            "https://huggingface.co/handy-computer/parakeet-ultra-gguf/resolve/main/parakeet-ultra-Q4_K_M.gguf";
 
     private static Boolean builtin;
 

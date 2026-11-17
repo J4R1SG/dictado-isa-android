@@ -8,13 +8,13 @@
     <!-- Pantalla de modelos de voz (ModelsActivity) -->
     <string name="models_title">Modelo de voz</string>
     <string name="models_active_section">Modelo activo</string>
-    <string name="models_builtin">Parakeet TDT 0.6B v3</string>
+    <string name="models_builtin">Parakeet Ultra</string>
     <string name="models_builtin_sub">Incluido en la app · 25 idiomas europeos</string>
     <string name="model_desc_parakeet110m">Solo inglés, pequeño y rápido</string>
     <string name="model_desc_sensevoice">Inglés, chino, cantonés, japonés, coreano; rápido</string>
     <string name="model_desc_whisper_small">99 idiomas, compacto; traduce al inglés</string>
     <string name="model_desc_nemotron">40 idiomas, con puntuación</string>
-    <string name="model_desc_parakeet_v3_q8">Parakeet TDT 0.6B v3 con más precisión</string>
+    <string name="model_desc_parakeet_ultra_q8">Parakeet Ultra con un poco más de precisión; más pesado y más lento</string>
     <string name="model_desc_whisper_turbo">99 idiomas, el más preciso de esta lista; no traduce</string>
     <string name="model_desc_browse">Ver todos los modelos de transcribe.cpp</string>
     <string name="model_desc_recommended">Recomendado · 25 idiomas europeos, rápido y preciso</string>
@@ -44,6 +44,6 @@
     <string name="models_threads_auto">Automático</string>
     <string name="no_model_title">Falta el modelo de voz</string>
     <string name="no_model_steps">1. Descarga el archivo del modelo (.gguf) en el navegador.\n2. Toca «Importar el modelo» y elige ese archivo (normalmente en Descargas).\n\nDespués puedes borrarlo de Descargas.</string>
-    <string name="btn_download_recommended">Descargar el modelo recomendado (485 MB)</string>
+    <string name="btn_download_recommended">Descargar el modelo recomendado (486 MB)</string>
     <string name="no_model_short">Falta el modelo de voz. Ve a Ajustes e importa el modelo.</string>
 </resources>
