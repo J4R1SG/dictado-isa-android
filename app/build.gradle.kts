@@ -15,11 +15,12 @@ android {
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "dev.notune.transcribe"
+        // Id propio: se instala junto a la app original sin chocar con ella
+        applicationId = "dev.j4r1sg.dictado"
         minSdk = 26
         targetSdk = 36
         versionCode = 23
-        versionName = "0.2.3"
+        versionName = "0.2.3-ultra.1"
         ndk {
             abiFilters += targetAbis
         }
