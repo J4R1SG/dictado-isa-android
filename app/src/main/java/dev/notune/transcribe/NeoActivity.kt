@@ -84,7 +84,7 @@ class NeoActivity : AppCompatActivity() {
         writeModelLanguageOnce()
 
         val store = SecureStore(this)
-        client = NeoClient(store) { deviceName() }
+        client = NeoClient(store, deviceName = { deviceName() })
         discovery = Discovery(client)
 
         WebView.setWebContentsDebuggingEnabled(false)
