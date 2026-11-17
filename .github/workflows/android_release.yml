@@ -81,21 +81,32 @@ jobs:
     - name: Keystore
       env:
         KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        S_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+        S_KEY_PASS: ${{ secrets.KEY_PASS }}
+        S_STORE_PASS: ${{ secrets.STORE_PASS }}
       run: |
         if [ -n "$KEYSTORE_BASE64" ]; then
           echo "$KEYSTORE_BASE64" | base64 --decode > release.keystore
-          echo "SIGNING=fija" >> $GITHUB_ENV
+          {
+            echo "SIGNING=fija"
+            echo "KEY_ALIAS=$S_KEY_ALIAS"
+            echo "KEY_PASS=$S_KEY_PASS"
+            echo "STORE_PASS=$S_STORE_PASS"
+          } >> $GITHUB_ENV
         else
+          PASS=$(openssl rand -hex 16)
+          echo "::add-mask::$PASS"
           keytool -genkeypair -keystore release.keystore -alias release -keyalg RSA -keysize 2048 \
-            -validity 10000 -storepass password -keypass password -dname "CN=Dictado Ultra prueba" -noprompt
-          echo "SIGNING=prueba" >> $GITHUB_ENV
+            -validity 10000 -storepass "$PASS" -keypass "$PASS" -dname "CN=Dictado Ultra prueba" -noprompt
+          {
+            echo "SIGNING=prueba"
+            echo "KEY_ALIAS=release"
+            echo "KEY_PASS=$PASS"
+            echo "STORE_PASS=$PASS"
+          } >> $GITHUB_ENV
         fi
 
     - name: Build Release APK
-      env:
-        KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-        KEY_PASS: ${{ secrets.KEY_PASS }}
-        STORE_PASS: ${{ secrets.STORE_PASS }}
       run: ./gradlew assembleFdroidRelease
 
     - name: Rename APK
