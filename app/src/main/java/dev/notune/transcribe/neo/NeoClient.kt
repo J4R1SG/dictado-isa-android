@@ -48,8 +48,8 @@ class NeoClient(
         const val MSG_RED = "No se pudo conectar con la computadora de la clínica. Revisa que el teléfono " +
             "esté en el wifi de la clínica y que Neo Records esté abierto en la computadora."
         const val MSG_NO_ES = "No es la computadora de la clínica. No escribas tu contraseña aquí."
-        const val MSG_OTRA_PC = "La PC tiene un certificado distinto. Si cambiaron la PC o reinstalaron " +
-            "Neo Records, toca «Olvidar esta PC»."
+        const val MSG_OTRA_PC = "La computadora de la clínica cambió. Si cambiaron la computadora o reinstalaron " +
+            "Neo Records, toca «Olvidar esta computadora»."
         const val MSG_SESION = "Tu sesión se cerró. Entra otra vez."
         const val MSG_FALLA = "Algo falló. Intenta otra vez."
         const val MSG_SIN_PC = "Primero hay que encontrar la computadora de la clínica."
@@ -204,7 +204,10 @@ class NeoClient(
         val (host, typedPort) = HostFilter.parseAddress(input)?.takeIf { allowHost(it.first) }
             ?: throw NeoError("Esa dirección no es de la red de la clínica. Debe ser como 192.168.x.x.")
         val explicit = typedPort ?: HostFilter.validPort(portArg) ?: discovered[host]
-        val p = explicit ?: port
+        // Same PC as the stored one and no port given: keep using the port saved for it.
+        val sameHost = store.get(K_HOST) == host
+        val keptPort = if (sameHost) HostFilter.validPort(store.get(K_PORT)?.toIntOrNull()) else null
+        val p = explicit ?: keptPort ?: port
         val pin = pin()
         val trust = if (pin != null) PinnedTrust(pin) else CaptureTrust()
         val name = try {
@@ -214,7 +217,7 @@ class NeoClient(
             if (e.status == 495) throw e
             throw NeoError(MSG_RED)
         }
-        store.put(mapOf(K_HOST to host, K_NAME to name.ifEmpty { host }, K_PORT to explicit?.toString()))
+        store.put(mapOf(K_HOST to host, K_NAME to name.ifEmpty { host }, K_PORT to (explicit ?: keptPort)?.toString()))
         return JSONObject().put("name", name.ifEmpty { host })
     }
 

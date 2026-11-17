@@ -170,6 +170,30 @@ class NeoClientTest {
     }
 
     @Test
+    fun reconnectWithoutPortKeepsStoredPort() {
+        val c = NeoClient(store, { "x" }, { it == "127.0.0.1" }, 8768)
+        c.connect("127.0.0.1:${pc.port}")
+        // The page reconnects to the stored PC without a port.
+        assertEquals("PC-PRUEBA", c.connect("127.0.0.1").getString("name"))
+        assertEquals(pc.port.toString(), store.map[NeoClient.K_PORT])
+        assertEquals(pc.port, c.connect("127.0.0.1", null).let { c.last()!!.getInt("port") })
+    }
+
+    @Test
+    fun portFromPageIsUsed() {
+        val c = NeoClient(store, { "x" }, { it == "127.0.0.1" }, 8768)
+        c.connect("127.0.0.1", pc.port)
+        assertEquals(pc.port.toString(), store.map[NeoClient.K_PORT])
+    }
+
+    @Test
+    fun otherPcMessageUsesPlainWords() {
+        assertTrue(NeoClient.MSG_OTRA_PC.contains("«Olvidar esta computadora»"))
+        assertFalse(NeoClient.MSG_OTRA_PC.contains("certificado"))
+        assertFalse(NeoClient.MSG_OTRA_PC.contains("PC"))
+    }
+
+    @Test
     fun discoveredPortIsUsedByConnect() {
         val c = NeoClient(store, { "x" }, { it == "127.0.0.1" }, 8768)
         c.noteDiscovered("127.0.0.1", pc.port)

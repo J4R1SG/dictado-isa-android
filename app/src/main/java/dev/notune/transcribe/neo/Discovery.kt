@@ -54,8 +54,23 @@ class Discovery(private val client: NeoClient) {
             found.putIfAbsent(pc.getString("host"), pc)
             client.noteDiscovered(pc.getString("host"), pc.optInt("port"))
         }
+        if (found.isEmpty()) probeStored()?.let { found[it.getString("host")] = it }
         if (found.isEmpty()) for (pc in scan(locals)) found.putIfAbsent(pc.getString("host"), pc)
         return JSONArray(found.values.toList())
+    }
+
+    /** The PC already stored, asked directly on its stored port (UDP may not reach the phone). */
+    private fun probeStored(): JSONObject? {
+        val last = client.last() ?: return null
+        val host = last.getString("host")
+        val port = last.optInt("port")
+        val name = try {
+            client.hello(host, 1500, port)
+        } catch (e: Exception) {
+            null
+        } ?: return null
+        client.noteDiscovered(host, port)
+        return JSONObject().put("host", host).put("name", name.ifEmpty { host }).put("port", port)
     }
 
     private fun udp(locals: List<Pair<String, Int>>): List<JSONObject> {
