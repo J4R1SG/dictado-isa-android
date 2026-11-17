@@ -331,9 +331,6 @@ class NeoClient(
         val trust = PinnedTrust(pin)
         val headers = authHeaders(token)
 
-        // New keys first: the PC's first step is only valid for 60 s.
-        val nk = Scram.newKeys(new)
-
         val cnonce = Scram.newCnonce()
         val r1 = request(host, "POST", "/api/v1/cuenta/clave/inicio",
             JSONObject().put("cnonce", cnonce).toString(), trust, headers)
@@ -344,6 +341,10 @@ class NeoClient(
         val first = jsonOrFail(r1)
         val cbdata = Pin.of(r1.certDer)
         val sf = Scram.checkServerFirst(cnonce, first.opt("sid"), first.opt("salt"), first.opt("iter"), first.opt("nonce"))
+        // The PC hands out the salt for the new password, so a changed password looks the same from
+        // outside as an untouched one. Older PCs do not send it: then a random salt is used.
+        val given = Scram.unb64(first.optString("new_salt", ""))
+        val nk = if (given != null && given.size == 16) Scram.newKeys(new, given) else Scram.newKeys(new)
         val keys = Scram.keys(Scram.saltedPassword(old, sf.salt, sf.iterations))
         val am = Scram.authMessage(user, cnonce, sf.nonce, sf.saltB64, sf.iterations, cbdata)
         val expected = Scram.serverSignature(keys.serverKey, am)
