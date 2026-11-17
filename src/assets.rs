@@ -119,7 +119,20 @@ pub fn extract_builtin_model(env: &mut JNIEnv, context: &JObject) -> anyhow::Res
     if extracted.is_err() {
         let _ = std::fs::remove_dir_all(&tmp_root);
     }
-    let tmp_model_dir = extracted?;
+    let tmp_model_dir = match extracted {
+        Ok(dir) => dir,
+        Err(e) => {
+            // An update brought a different model but it didn't fit (e.g.
+            // storage full): keep dictating with the complete older copy.
+            if marker_file.exists() {
+                if let Ok(old) = find_gguf(&model_dir) {
+                    log::warn!("New bundled model not extracted ({}); keeping {}", e, old.display());
+                    return Ok(old);
+                }
+            }
+            return Err(e);
+        }
+    };
 
     if model_dir.exists() {
         log::info!("Replacing incomplete model directory");
