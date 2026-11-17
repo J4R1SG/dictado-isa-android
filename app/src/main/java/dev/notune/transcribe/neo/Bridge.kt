@@ -15,7 +15,7 @@ object Bridge {
     const val MAX_MESSAGE = 256 * 1024
     val OPS = setOf(
         "discover", "connect", "login", "logout", "me", "changePassword", "api",
-        "micStart", "micStop", "micCancel", "modelStatus", "importModel", "deviceName",
+        "micStart", "micStop", "micCancel", "modelStatus", "importModel", "deviceName", "forget",
     )
     val EVENTS = setOf("mic_level", "mic_status", "mic_text")
 
@@ -129,7 +129,7 @@ object Bridge {
         return n.ifEmpty { fallback }
     }
 
-    /** UDP discovery answer {"svc":"neo-records","v":1,"port":8768,"name":...} from a private host. */
+    /** UDP discovery answer {"svc":"neo-records","v":1,"port":<movil_puerto, 8768 by default>,"name":...} from a private host. */
     fun parseDiscovery(fromHost: String, payload: String): JSONObject? {
         if (!HostFilter.isAllowedHost(fromHost) || payload.length > 512) return null
         val o = try {
@@ -137,8 +137,9 @@ object Bridge {
         } catch (e: JSONException) {
             return null
         }
-        if (o.opt("svc") != "neo-records" || o.opt("v") != 1 || o.opt("port") != HostFilter.PORT) return null
-        return JSONObject().put("host", fromHost).put("name", cleanName(o.opt("name"), fromHost))
+        if (o.opt("svc") != "neo-records" || o.opt("v") != 1) return null
+        val port = HostFilter.validPort(o.opt("port")) ?: return null
+        return JSONObject().put("host", fromHost).put("port", port).put("name", cleanName(o.opt("name"), fromHost))
     }
 
     /** GET /api/v1/hola answer: the PC name, or null if it is not Neo Records. */

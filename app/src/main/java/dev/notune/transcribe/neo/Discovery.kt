@@ -28,13 +28,12 @@ class Discovery(private val client: NeoClient) {
         const val SCAN_TIMEOUT_MS = 400
     }
 
-    /** Private IPv4 addresses of this phone with their prefix length (Wi-Fi first). */
+    /** Private IPv4 addresses of the phone's Wi-Fi with their prefix length (never the mobile data). */
     fun localAddresses(): List<Pair<String, Int>> {
         val out = mutableListOf<Pair<String, Int>>()
         try {
             val ifaces = NetworkInterface.getNetworkInterfaces()?.toList().orEmpty()
-                .filter { it.isUp && !it.isLoopback && !it.isVirtual }
-                .sortedBy { if (it.name.startsWith("wlan")) 0 else 1 }
+                .filter { it.isUp && !it.isLoopback && !it.isVirtual && HostFilter.isWifiInterface(it.name) }
             for (ni in ifaces) {
                 for (ia in ni.interfaceAddresses) {
                     val a = ia.address as? Inet4Address ?: continue
@@ -51,7 +50,10 @@ class Discovery(private val client: NeoClient) {
     fun find(): JSONArray {
         val locals = localAddresses()
         val found = LinkedHashMap<String, JSONObject>()
-        for (pc in udp(locals)) found.putIfAbsent(pc.getString("host"), pc)
+        for (pc in udp(locals)) {
+            found.putIfAbsent(pc.getString("host"), pc)
+            client.noteDiscovered(pc.getString("host"), pc.optInt("port"))
+        }
         if (found.isEmpty()) for (pc in scan(locals)) found.putIfAbsent(pc.getString("host"), pc)
         return JSONArray(found.values.toList())
     }

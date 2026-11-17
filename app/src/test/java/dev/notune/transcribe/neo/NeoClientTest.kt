@@ -137,10 +137,44 @@ class NeoClientTest {
         // me() asks for a new login instead of failing; the token is not handed out.
         assertNull(client.me())
         assertTrue(pc.seen.none { it.cert == "b" })
-        // Logging in again re-verifies through SCRAM and pins the new certificate.
+        // A new login against the different certificate is refused before any proof is sent.
+        val before = pc.seen.size
+        val e2 = expectError { client.login("jaris", "Prueba-123") }
+        assertEquals(NeoClient.MSG_OTRA_PC, e2.message)
+        assertEquals(495, e2.status)
+        assertTrue(pc.seen.drop(before).none { it.path == "/api/v1/login/fin" })
+        assertEquals(Scram.b64(Pin.of(pc.certs.getValue("a"))), store.map[NeoClient.K_PIN])
+        // Same after a logout (the pin outlives the session).
+        client.logout()
+        assertTrue(expectError { client.login("jaris", "Prueba-123") }.status == 495)
+        // Connecting again is refused too, until the doctor forgets the PC.
+        assertEquals(495, expectError { client.connect("127.0.0.1") }.status)
+        client.forget()
+        assertNull(client.host())
+        assertNull(store.map[NeoClient.K_PIN])
+        assertNull(store.map[NeoClient.K_TOKEN])
+        client.connect("127.0.0.1")
         client.login("jaris", "Prueba-123")
         assertEquals(Scram.b64(Pin.of(pc.certs.getValue("b"))), store.map[NeoClient.K_PIN])
         assertNotNull(client.api("GET", "/api/v1/consultas?date=11-16-2026", null))
+    }
+
+    @Test
+    fun manualAddressWithPortIsRememberedAndUsed() {
+        val c = NeoClient(store, { "x" }, { it == "127.0.0.1" }, 8768)
+        assertEquals("PC-PRUEBA", c.connect("127.0.0.1:${pc.port}").getString("name"))
+        assertEquals(pc.port.toString(), store.map[NeoClient.K_PORT])
+        assertEquals(pc.port, c.last()!!.getInt("port"))
+        assertEquals("jaris", c.login("jaris", "Prueba-123").getString("user"))
+        assertEquals("jaris", c.me()!!.getString("user"))
+    }
+
+    @Test
+    fun discoveredPortIsUsedByConnect() {
+        val c = NeoClient(store, { "x" }, { it == "127.0.0.1" }, 8768)
+        c.noteDiscovered("127.0.0.1", pc.port)
+        c.connect("127.0.0.1")
+        assertEquals(pc.port, c.last()!!.getInt("port"))
     }
 
     @Test

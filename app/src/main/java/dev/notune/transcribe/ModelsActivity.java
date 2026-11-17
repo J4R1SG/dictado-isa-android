@@ -382,10 +382,10 @@ public class ModelsActivity extends AppCompatActivity {
         Uri uri = data.getData();
         if (uri == null) return;
 
-        String name = queryDisplayName(uri);
+        String name = ModelStore.safeModelName(queryDisplayName(uri));
         long size = querySize(uri);
 
-        if (name == null || !ModelStore.isGguf(name)) {
+        if (name == null) {
             new MaterialAlertDialogBuilder(this)
                     .setTitle(R.string.models_import_bad_title)
                     .setMessage(R.string.models_import_bad_body)
@@ -416,10 +416,19 @@ public class ModelsActivity extends AppCompatActivity {
             boolean ok = false;
             try (InputStream in = getContentResolver().openInputStream(uri);
                  OutputStream out = new FileOutputStream(tmp)) {
+                if (in == null) throw new IOException("no stream");
                 byte[] buf = new byte[1024 * 1024];
                 long copied = 0;
                 int read;
-                while (in != null && (read = in.read(buf)) != -1) {
+                boolean first = true;
+                while ((read = in.read(buf)) != -1) {
+                    if (first) {
+                        // every GGUF file starts with these four bytes
+                        if (read < 4 || buf[0] != 'G' || buf[1] != 'G' || buf[2] != 'U' || buf[3] != 'F') {
+                            throw new IOException("not a GGUF file");
+                        }
+                        first = false;
+                    }
                     out.write(buf, 0, read);
                     copied += read;
                     if (size > 0) {
@@ -427,7 +436,7 @@ public class ModelsActivity extends AppCompatActivity {
                         runOnUiThread(() -> importBar.setProgress(pct));
                     }
                 }
-                ok = true;
+                ok = !first && (size <= 0 || copied == size);
             } catch (IOException e) {
                 Log.e(TAG, "Model import failed", e);
             }

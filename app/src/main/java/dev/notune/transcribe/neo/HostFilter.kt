@@ -37,6 +37,31 @@ object HostFilter {
         return if (octets(h) != null) h else null
     }
 
+    /** A port the PC may be configured with (movil_puerto); the privileged range is refused. */
+    fun validPort(p: Any?): Int? = (p as? Int)?.takeIf { it in 1024..65535 }
+
+    /**
+     * Like [clean] but also reads an explicit "host:port" (the PC's port is configurable).
+     * Returns host to port, where port is null when none was typed (use the default).
+     */
+    fun parseAddress(input: String?): Pair<String, Int?>? {
+        var h = (input ?: "").trim()
+        if (h.length > 64) return null
+        h = h.removePrefix("https://").removePrefix("http://").trimEnd('/')
+        var port: Int? = null
+        val i = h.lastIndexOf(':')
+        if (i >= 0) {
+            val digits = h.substring(i + 1)
+            if (digits.isEmpty() || digits.length > 5 || !digits.all { it in '0'..'9' }) return null
+            port = validPort(digits.toInt()) ?: return null
+            h = h.substring(0, i)
+        }
+        return if (octets(h) != null) h to port else null
+    }
+
+    /** True for the phone's Wi-Fi interface (carrier data interfaces are never scanned). */
+    fun isWifiInterface(name: String): Boolean = name.startsWith("wlan")
+
     /** [clean], and only if it is an allowed private host. */
     fun normalize(input: String?): String? = clean(input)?.takeIf { isAllowedHost(it) }
 

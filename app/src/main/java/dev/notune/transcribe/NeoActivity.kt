@@ -14,11 +14,13 @@ import android.os.Looper
 import android.os.SystemClock
 import android.provider.Settings
 import android.util.Log
+import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.webkit.ConsoleMessage
 import android.webkit.GeolocationPermissions
 import android.webkit.PermissionRequest
+import android.webkit.RenderProcessGoneDetail
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
@@ -41,6 +43,7 @@ import dev.notune.transcribe.neo.Discovery
 import dev.notune.transcribe.neo.NeoClient
 import dev.notune.transcribe.neo.NeoError
 import dev.notune.transcribe.neo.SecureStore
+import dev.notune.transcribe.neo.VoiceStatus
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -73,6 +76,9 @@ class NeoActivity : AppCompatActivity() {
     private var recording = false
     private var autoStop = false
     @Volatile private var lastStatus = ""
+    // Set only when the speech MODEL failed to load; mic or transcription errors never set it.
+    @Volatile private var modelFailed = false
+    private var webDestroyed = false
     private var pendingMic: Bridge.Request? = null
     private var pendingMicAt = 0L
 
@@ -93,6 +99,8 @@ class NeoActivity : AppCompatActivity() {
         val dark = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
         root.setBackgroundColor(if (dark) Color.rgb(0x16, 0x1a, 0x1c) else Color.rgb(0xf6, 0xf3, 0xec))
         web.setBackgroundColor(Color.TRANSPARENT)
+        // The login password must never be offered to a password manager / autofill service.
+        web.importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS
         root.addView(web, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         setContentView(root)
         // targetSdk 36 draws edge to edge: keep the page clear of the bars, the notch and the keyboard.
@@ -143,6 +151,19 @@ class NeoActivity : AppCompatActivity() {
 
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean =
                 !isAppUrl(request.url)
+
+            // Android killed the page's renderer (low memory, crash). Without this the whole app dies.
+            override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
+                micCancelQuiet()
+                reply = null
+                (view.parent as? ViewGroup)?.removeView(view)
+                if (!webDestroyed) {
+                    webDestroyed = true
+                    view.destroy()
+                }
+                main.post { if (!isFinishing && !isDestroyed) recreate() }
+                return true
+            }
         }
         web.webChromeClient = object : WebChromeClient() {
             override fun onPermissionRequest(request: PermissionRequest) = request.deny()
@@ -190,7 +211,11 @@ class NeoActivity : AppCompatActivity() {
         val a = req.args
         when (req.op) {
             "discover" -> work(req) { JSONObject().put("pcs", discovery.find()).put("last", client.last() ?: JSONObject.NULL) }
-            "connect" -> work(req) { client.connect(a.opt("host") as? String) }
+            "connect" -> work(req) { client.connect(a.opt("host") as? String, a.opt("port") as? Int) }
+            "forget" -> {
+                micCancelQuiet()
+                work(req) { client.forget(); JSONObject() }
+            }
             "login" -> work(req) { JSONObject().put("user", client.login(a.opt("user") as? String, a.opt("pass") as? String)) }
             "logout" -> {
                 micCancelQuiet()
@@ -314,6 +339,7 @@ class NeoActivity : AppCompatActivity() {
             return
         }
         if (recording) cancelRecording()
+        lastStatus = "" // an old mic error must not describe this recording
         startRecording(autoStop)
         recording = true
         post(Bridge.ok(req.id, JSONObject()))
@@ -330,7 +356,7 @@ class NeoActivity : AppCompatActivity() {
         val has = ModelStore.hasAnyModel(this)
         val active = if (has) ModelStore.ensureValidSelection(this) else ""
         val s = lastStatus
-        val failed = has && s.startsWith("Error") && s != ModelStore.NO_MODEL_STATUS
+        val failed = has && modelFailed
         val status = when {
             !has -> "Falta el modelo de voz. Toca «Importar modelo» y elige el archivo .gguf."
             failed -> "El modelo de voz no cargó. Toca «Importar modelo» y elige el archivo otra vez."
@@ -361,6 +387,8 @@ class NeoActivity : AppCompatActivity() {
 
     fun onStatusUpdate(status: String) {
         lastStatus = status
+        if (VoiceStatus.isLoadFailure(status)) modelFailed = true
+        else if (VoiceStatus.clearsLoadFailure(status)) modelFailed = false
         event("mic_status", JSONObject().put("status", status))
     }
 
@@ -388,6 +416,7 @@ class NeoActivity : AppCompatActivity() {
         super.onResume()
         // Back from the model screen: its reload reported there, so forget a stale status here.
         if (lastStatus.startsWith("Error")) lastStatus = ""
+        modelFailed = false
     }
 
     override fun onStop() {
@@ -407,7 +436,10 @@ class NeoActivity : AppCompatActivity() {
         }
         scope.cancel()
         reply = null
-        web.destroy()
+        if (!webDestroyed) {
+            webDestroyed = true
+            web.destroy()
+        }
         super.onDestroy()
     }
 

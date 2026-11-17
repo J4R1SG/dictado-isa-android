@@ -139,6 +139,11 @@ class BridgeTest {
         assertNull(Bridge.parseDiscovery("192.168.50.20", """{"svc":"other","v":1,"port":8768}"""))
         assertNull(Bridge.parseDiscovery("192.168.50.20", """{"svc":"neo-records","v":2,"port":8768}"""))
         assertNull(Bridge.parseDiscovery("192.168.50.20", """{"svc":"neo-records","v":1,"port":443}"""))
+        assertNull(Bridge.parseDiscovery("192.168.50.20", """{"svc":"neo-records","v":1}"""))
+        // The PC's configurable port (movil_puerto) is passed on.
+        val other = Bridge.parseDiscovery("192.168.50.20", """{"svc":"neo-records","v":1,"port":8770,"name":"X"}""")!!
+        assertEquals(8770, other.getInt("port"))
+        assertEquals(8768, pc.getInt("port"))
         assertNull(Bridge.parseDiscovery("192.168.50.20", "NEO-RECORDS?v1"))
         assertNull(Bridge.parseDiscovery("192.168.50.20", "x".repeat(600)))
         val odd = Bridge.parseDiscovery("10.0.0.2", """{"svc":"neo-records","v":1,"port":8768,"name":"<img src=x>\u0007PC"}""")!!

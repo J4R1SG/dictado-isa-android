@@ -8,6 +8,7 @@ import java.net.ConnectException
 import java.net.NoRouteToHostException
 import java.net.SocketTimeoutException
 import java.net.URL
+import java.util.concurrent.ConcurrentHashMap
 import java.security.cert.X509Certificate
 import javax.net.ssl.HttpsURLConnection
 import javax.net.ssl.SSLException
@@ -20,23 +21,26 @@ interface KeyValue {
 }
 
 /**
- * Talks to the clinic PC over HTTPS (port 8768): login with SCRAM-SHA-256-PLUS, change of
+ * Talks to the clinic PC over HTTPS (port 8768 unless the PC announces another): login with SCRAM-SHA-256-PLUS, change of
  * password, and the /api/v1 calls. Blocking; call it from a background thread.
  *
  * Stored: host and name of the PC, the certificate pin, the session token, the device id.
- * The token is only ever sent over a connection whose certificate matches the pin.
+ * The token is only ever sent over a connection whose certificate matches the pin, and once a
+ * pin exists EVERY later connection (including a new login) must match it. Only a first-ever
+ * connection (no pin) or [forget] may trust a certificate it has not seen.
  */
 class NeoClient(
     private val store: KeyValue,
     private val deviceName: () -> String,
     // Only the JVM tests change these (to reach a fake PC on 127.0.0.1).
     private val allowHost: (String) -> Boolean = HostFilter::isAllowedHost,
-    private val port: Int = HostFilter.PORT,
+    private val port: Int = HostFilter.PORT, // default port when the PC announced none
 ) {
 
     companion object {
         const val K_HOST = "host"
         const val K_NAME = "name"
+        const val K_PORT = "port"
         const val K_PIN = "pin"
         const val K_TOKEN = "token"
         const val K_DEVICE = "device"
@@ -44,7 +48,8 @@ class NeoClient(
         const val MSG_RED = "No se pudo conectar con la computadora de la clínica. Revisa que el teléfono " +
             "esté en el wifi de la clínica y que Neo Records esté abierto en la computadora."
         const val MSG_NO_ES = "No es la computadora de la clínica. No escribas tu contraseña aquí."
-        const val MSG_OTRA_PC = "La computadora no es la misma de antes. Vuelve a entrar con tu usuario y contraseña."
+        const val MSG_OTRA_PC = "La PC tiene un certificado distinto. Si cambiaron la PC o reinstalaron " +
+            "Neo Records, toca «Olvidar esta PC»."
         const val MSG_SESION = "Tu sesión se cerró. Entra otra vez."
         const val MSG_FALLA = "Algo falló. Intenta otra vez."
         const val MSG_SIN_PC = "Primero hay que encontrar la computadora de la clínica."
@@ -63,7 +68,22 @@ class NeoClient(
 
     fun last(): JSONObject? {
         val h = host() ?: return null
-        return JSONObject().put("host", h).put("name", store.get(K_NAME) ?: h)
+        return JSONObject().put("host", h).put("name", store.get(K_NAME) ?: h).put("port", currentPort())
+    }
+
+    /** Port of the stored PC (movil_puerto on the PC), or the default. */
+    private fun currentPort(): Int = HostFilter.validPort(store.get(K_PORT)?.toIntOrNull()) ?: port
+
+    // Ports announced by the PC's UDP answer, for the PC the doctor is about to pick.
+    private val discovered = ConcurrentHashMap<String, Int>()
+
+    fun noteDiscovered(host: String, announcedPort: Int) {
+        HostFilter.validPort(announcedPort)?.let { discovered[host] = it }
+    }
+
+    /** Forget the PC (host, name, port, certificate pin and session) so another one can be set up. */
+    fun forget() {
+        store.put(mapOf(K_HOST to null, K_NAME to null, K_PORT to null, K_PIN to null, K_TOKEN to null))
     }
 
     private fun pin(): ByteArray? = Scram.unb64(store.get(K_PIN))?.takeIf { it.size == 32 }
@@ -91,7 +111,7 @@ class NeoClient(
      */
     fun request(host: String, method: String, path: String, body: String?, trust: X509TrustManager,
                 headers: Map<String, String> = emptyMap(), connectMs: Int = 5000, readMs: Int = 30000,
-                beforeBody: ((ByteArray) -> Unit)? = null): Resp {
+                port: Int = currentPort(), beforeBody: ((ByteArray) -> Unit)? = null): Resp {
         if (!allowHost(host)) throw NeoError(MSG_SIN_PC)
         val c = URL("https", host, port, path).openConnection() as HttpsURLConnection
         try {
@@ -168,19 +188,33 @@ class NeoClient(
     // ---- hello / connect
 
     /** GET /api/v1/hola with any certificate and no credentials. PC name, or null if it isn't one. */
-    fun hello(host: String, timeoutMs: Int): String? = try {
-        val r = request(host, "GET", "/api/v1/hola", null, CaptureTrust(), connectMs = timeoutMs, readMs = timeoutMs)
+    fun hello(host: String, timeoutMs: Int, helloPort: Int = port): String? = try {
+        val r = request(host, "GET", "/api/v1/hola", null, CaptureTrust(), connectMs = timeoutMs, readMs = timeoutMs,
+            port = helloPort)
         if (r.code == 200) Bridge.parseHello(r.text) else null
     } catch (e: NeoError) {
         null
     }
 
-    /** Checks that [input] is a Neo Records PC and remembers it as the PC to use. */
-    fun connect(input: String?): JSONObject {
-        val host = HostFilter.clean(input)?.takeIf { allowHost(it) }
+    /**
+     * Checks that [input] ("192.168.x.x" or "192.168.x.x:port") is a Neo Records PC and remembers
+     * it as the PC to use. With a pin already stored the PC must present that certificate.
+     */
+    fun connect(input: String?, portArg: Int? = null): JSONObject {
+        val (host, typedPort) = HostFilter.parseAddress(input)?.takeIf { allowHost(it.first) }
             ?: throw NeoError("Esa dirección no es de la red de la clínica. Debe ser como 192.168.x.x.")
-        val name = hello(host, 4000) ?: throw NeoError(MSG_RED)
-        store.put(mapOf(K_HOST to host, K_NAME to name.ifEmpty { host }))
+        val explicit = typedPort ?: HostFilter.validPort(portArg) ?: discovered[host]
+        val p = explicit ?: port
+        val pin = pin()
+        val trust = if (pin != null) PinnedTrust(pin) else CaptureTrust()
+        val name = try {
+            val r = request(host, "GET", "/api/v1/hola", null, trust, connectMs = 4000, readMs = 4000, port = p)
+            (if (r.code == 200) Bridge.parseHello(r.text) else null) ?: throw NeoError(MSG_RED)
+        } catch (e: NeoError) {
+            if (e.status == 495) throw e
+            throw NeoError(MSG_RED)
+        }
+        store.put(mapOf(K_HOST to host, K_NAME to name.ifEmpty { host }, K_PORT to explicit?.toString()))
         return JSONObject().put("name", name.ifEmpty { host })
     }
 
@@ -195,7 +229,10 @@ class NeoClient(
         if (password.length > 1024) throw NeoError(MSG_FAIL, 401)
         Scram.normalize(password)
         val cnonce = Scram.newCnonce()
-        val capture = CaptureTrust()
+        // After the first verified login the pinned certificate is required here too: a different
+        // certificate stops the login before any proof is computed or sent.
+        val pin = pin()
+        val capture: X509TrustManager = if (pin != null) PinnedTrust(pin) else CaptureTrust()
 
         val r1 = request(host, "POST", "/api/v1/login/inicio",
             JSONObject().put("user", user).put("cnonce", cnonce).toString(), capture)

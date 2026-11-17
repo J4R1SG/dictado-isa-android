@@ -116,4 +116,36 @@ class RulesTest {
         // Length counts letters, not UTF-16 units: 8 emoji are 8 characters.
         assertNull(PasswordPolicy.check("ana", "🐶🐱🐭🐹🐰🦊🐻🐼"))
     }
+
+    @Test
+    fun addressWithPort() {
+        assertEquals("192.168.50.20" to 8770, HostFilter.parseAddress(" https://192.168.50.20:8770/ "))
+        assertEquals("192.168.50.20" to null, HostFilter.parseAddress("192.168.50.20"))
+        for (bad in listOf("192.168.50.20:", "192.168.50.20:80", "192.168.50.20:99999", "192.168.50.20:8a", "x:8768")) {
+            assertNull(bad, HostFilter.parseAddress(bad))
+        }
+    }
+
+    @Test
+    fun onlyWifiInterfacesAreUsed() {
+        assertTrue(HostFilter.isWifiInterface("wlan0"))
+        assertFalse(HostFilter.isWifiInterface("rmnet_data1"))
+        assertFalse(HostFilter.isWifiInterface("eth0"))
+    }
+
+    @Test
+    fun onlyLoadErrorsMeanTheModelFailed() {
+        for (m in listOf("Error: no audio recorded. Check microphone permissions.",
+            "Error: failed to open microphone: busy", "Error: no microphone available. Check permissions.",
+            "Error: transcription failed", "Listening...", "Ready")) {
+            assertFalse(m, VoiceStatus.isLoadFailure(m))
+        }
+        for (m in listOf("Error loading x.gguf: bad", "Error: Model failed to load", "Error: Model error: x",
+            "Error: model not loaded", "Error: Asset error: x")) {
+            assertTrue(m, VoiceStatus.isLoadFailure(m))
+        }
+        assertTrue(VoiceStatus.clearsLoadFailure("Ready"))
+        assertTrue(VoiceStatus.clearsLoadFailure("Loading model x..."))
+        assertFalse(VoiceStatus.clearsLoadFailure("Listening..."))
+    }
 }

@@ -76,6 +76,19 @@ public final class ModelStore {
         return names;
     }
 
+    /**
+     * A safe file name for an imported model, from what the file provider calls it: only the last
+     * path part is kept ("primary:Download/x.gguf" gives "x.gguf"), and names that could point
+     * outside the models folder or are hidden are refused (null).
+     */
+    static String safeModelName(String name) {
+        if (name == null) return null;
+        String n = name.replace((char) 92, '/');
+        n = n.substring(n.lastIndexOf('/') + 1).trim();
+        if (n.isEmpty() || n.startsWith(".") || n.contains("..") || n.indexOf((char) 0) >= 0 || n.length() > 150) return null;
+        return isGguf(n) ? n : null;
+    }
+
     static boolean isGguf(String name) {
         return name.toLowerCase(Locale.ROOT).endsWith(".gguf");
     }
