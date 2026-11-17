@@ -1,8 +1,10 @@
 import java.io.FileInputStream
 import java.security.MessageDigest
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
     id("com.android.application")
+    id("org.jetbrains.kotlin.android")
 }
 
 // ABIs to build native code for. Releases ship arm64 only; pass e.g.
@@ -15,12 +17,13 @@ android {
     compileSdk = 36
 
     defaultConfig {
-        // Id propio: se instala junto a la app original sin chocar con ella
+        // Mismo id y firma que el teclado Dictado Ultra: Neo Records se instala
+        // encima y conserva el modelo de voz ya importado.
         applicationId = "dev.j4r1sg.dictado"
         minSdk = 26
         targetSdk = 36
-        versionCode = 23
-        versionName = "0.2.3-ultra.1"
+        versionCode = 100
+        versionName = "1.0.0-beta.1"
         ndk {
             abiFilters += targetAbis
         }
@@ -63,8 +66,12 @@ android {
     }
 
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_1_8
-        targetCompatibility = JavaVersion.VERSION_1_8
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    testOptions {
+        unitTests.isReturnDefaultValues = false
     }
 
     // Source sets — the Rust-built .so files land in jniLibs via cargo-ndk
@@ -102,9 +109,23 @@ if (!isBundle) {
     }
 }
 
+kotlin {
+    compilerOptions {
+        jvmTarget.set(JvmTarget.JVM_17)
+    }
+}
+
 dependencies {
     // Material Components (Material 3 / Material You). Pulls in AppCompat.
     implementation("com.google.android.material:material:1.12.0")
+    // WebViewAssetLoader + WebViewCompat.addWebMessageListener (the JS bridge).
+    implementation("androidx.webkit:webkit:1.14.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
+
+    // JVM unit tests (app/src/test). org.json in android.jar is only a stub
+    // on the JVM; the real library replaces it for the tests.
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20250517")
 
     // Material/AppCompat transitively pull the legacy kotlin-stdlib-jdk7/jdk8:1.6.21
     // (via kotlinx-coroutines-android), whose classes were folded into

@@ -1,7 +1,7 @@
 name: Build Android App
 
-# Fork "Dictado Ultra": arma solo la variante sin modelo incluido (fdroid).
-# El modelo Parakeet Ultra (GGUF) se importa en la app una sola vez.
+# Neo Records (fork de Dictado Ultra): arma solo la variante sin modelo
+# incluido (fdroid). El modelo de voz (GGUF) se importa en la app una vez.
 
 on:
   push:
@@ -106,6 +106,18 @@ jobs:
           } >> $GITHUB_ENV
         fi
 
+    # Pruebas de la JVM (SCRAM, filtro de red, certificado fijado, puente).
+    - name: Unit tests
+      run: ./gradlew testFdroidReleaseUnitTest
+
+    - name: Upload test reports
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: unit-test-reports
+        path: app/build/reports/tests/
+        if-no-files-found: ignore
+
     - name: Build Release APK
       run: ./gradlew assembleFdroidRelease
 
@@ -113,24 +125,24 @@ jobs:
       run: |
         VERSION_NAME=$(grep 'versionName' app/build.gradle.kts | head -1 | grep -oP '"[^"]*"' | tr -d '"')
         echo "VERSION_NAME=$VERSION_NAME" >> $GITHUB_ENV
-        cp app/build/outputs/apk/fdroid/release/app-fdroid-release.apk "dictado-ultra-v${VERSION_NAME}-${SIGNING}.apk"
+        cp app/build/outputs/apk/fdroid/release/app-fdroid-release.apk "neo-records-v${VERSION_NAME}-${SIGNING}.apk"
         rm -f release.keystore
         ls -la *.apk
 
     - name: Upload APK Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: dictado-ultra-v${{ env.VERSION_NAME }}
-        path: dictado-ultra-v${{ env.VERSION_NAME }}-${{ env.SIGNING }}.apk
+        name: neo-records-v${{ env.VERSION_NAME }}
+        path: neo-records-v${{ env.VERSION_NAME }}-${{ env.SIGNING }}.apk
 
     - name: Create Release
       if: startsWith(github.ref, 'refs/tags/')
       uses: softprops/action-gh-release@v1
       with:
-        name: Dictado Ultra v${{ env.VERSION_NAME }}
+        name: Neo Records v${{ env.VERSION_NAME }}
         prerelease: true
         body: |
-          Teclado de dictado sin internet con el motor de Handy (transcribe.cpp 0.4.2).
-          Instala la APK, abre la app e importa parakeet-ultra-Q8_0.gguf en "Modelos".
+          Neo Records para el telefono: dictado sin internet (transcribe.cpp 0.4.2).
+          Instala la APK, abre la app e importa el modelo de voz en Ajustes.
           Firma: ${{ env.SIGNING }}.
-        files: dictado-ultra-v${{ env.VERSION_NAME }}-${{ env.SIGNING }}.apk
+        files: neo-records-v${{ env.VERSION_NAME }}-${{ env.SIGNING }}.apk

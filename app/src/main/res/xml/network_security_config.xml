@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Cero tráfico en claro. La confianza en la PC no viene de las CA del sistema sino del
+     certificado fijado tras un inicio de sesión SCRAM verificado (ver neo/Tls.kt). -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

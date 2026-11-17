@@ -1,32 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Material 3 DayNight base theme. Light/dark surfaces and text colors are
-         provided by the theme; on Android 12+ dynamic color (Material You)
-         overrides the seed with the user's wallpaper palette (applied in
-         App.onCreate via DynamicColors). The seed below is the brand blue used
-         as a fallback on older devices. -->
+    <!-- Material 3 DayNight. NeoActivity is a full-screen WebView; ModelsActivity
+         uses the Material widgets. Dark status-bar icons on the light background;
+         values-night/styles.xml switches them back to light. -->
     <style name="AppTheme" parent="Theme.Material3.DayNight.NoActionBar">
         <item name="colorPrimary">@color/colorPrimary</item>
         <item name="colorOnPrimary">@color/white</item>
-        <!-- Dark status-bar icons on the light background; the night variant
-             (values-night/styles.xml) switches them back to light. -->
         <item name="android:windowLightStatusBar">true</item>
-    </style>
-
-    <!-- Voice-input popup (RecognizeActivity): a translucent window so the
-         calling app stays visible (and keeps its UI state) behind the compact
-         bottom panel, instead of a full-screen takeover. -->
-    <style name="AppTheme.VoicePanel">
-        <item name="android:windowIsTranslucent">true</item>
-        <item name="android:windowBackground">@android:color/transparent</item>
-        <item name="android:windowContentOverlay">@null</item>
-        <item name="android:windowAnimationStyle">@android:style/Animation.InputMethod</item>
-        <!-- Unspecified, not stateAlwaysHidden: either way the caller's
-             keyboard is hidden while the panel (which has no text field) has
-             focus, so it can't cover the panel. But an always-hidden window
-             also sends a hide request when it loses focus; that lands just as
-             the caller's field reconnects and makes keyboards that insert the
-             result themselves (SwiftKey) lose it much more often. -->
-        <item name="android:windowSoftInputMode">stateUnspecified</item>
     </style>
 </resources>
