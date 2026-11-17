@@ -43,7 +43,7 @@ class FakePc(private val iterations: Int = Scram.ITER) : AutoCloseable {
     private val sessions = mutableMapOf<String, Pair<String, String>>() // token -> (user, device)
 
     init {
-        addUser("jaris", "Prueba-123", mustChange = true)
+        addUser("doc", "Prueba-123", mustChange = true)
         Thread { loop() }.apply { isDaemon = true }.start()
     }
 
@@ -215,7 +215,7 @@ class FakePc(private val iterations: Int = Scram.ITER) : AutoCloseable {
 
     private fun yo(user: String): JSONObject {
         val u = users.getValue(user)
-        return JSONObject().put("user", user).put("name", "Jaris").put("role", "admin").put("doctor", "")
+        return JSONObject().put("user", user).put("name", "Doctora").put("role", "admin").put("doctor", "")
             .put("must_change", u.mustChange)
     }
 

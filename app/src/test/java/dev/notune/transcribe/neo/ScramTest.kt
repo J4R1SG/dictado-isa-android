@@ -138,7 +138,7 @@ class ScramTest {
 
     @Test
     fun userNamesAreCleaned() {
-        assertEquals("jaris", Scram.cleanUser("  Jaris "))
+        assertEquals("doc", Scram.cleanUser("  Doc "))
         assertEquals("dra.ana_2", Scram.cleanUser("Dra.Ana_2"))
         for (bad in listOf("", "a,b", "a=b", "año", "x".repeat(65), null)) assertEquals(null, Scram.cleanUser(bad))
     }

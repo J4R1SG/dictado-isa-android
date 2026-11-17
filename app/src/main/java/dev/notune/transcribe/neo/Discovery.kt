@@ -59,18 +59,30 @@ class Discovery(private val client: NeoClient) {
         return JSONArray(found.values.toList())
     }
 
-    /** The PC already stored, asked directly on its stored port (UDP may not reach the phone). */
-    private fun probeStored(): JSONObject? {
+    /**
+     * The PC already stored, asked directly (UDP may not reach the phone): first on its stored
+     * port, then on the default one in case the PC went back to it. The port that answered is
+     * noted so connect uses it.
+     */
+    internal fun probeStored(timeoutMs: Int = 1500): JSONObject? {
         val last = client.last() ?: return null
         val host = last.getString("host")
-        val port = last.optInt("port")
+        for (p in listOf(last.optInt("port"), client.defaultPort).distinct()) {
+            helloAt(host, timeoutMs, p)?.let { return it }
+        }
+        return null
+    }
+
+    /** Hello to one host on one port; on an answer the port is noted for connect and returned. */
+    internal fun helloAt(host: String, timeoutMs: Int, port: Int = client.defaultPort): JSONObject? {
+        val p = HostFilter.validPort(port) ?: return null
         val name = try {
-            client.hello(host, 1500, port)
+            client.hello(host, timeoutMs, p)
         } catch (e: Exception) {
             null
         } ?: return null
-        client.noteDiscovered(host, port)
-        return JSONObject().put("host", host).put("name", name.ifEmpty { host }).put("port", port)
+        client.noteDiscovered(host, p)
+        return JSONObject().put("host", host).put("name", name.ifEmpty { host }).put("port", p)
     }
 
     private fun udp(locals: List<Pair<String, Int>>): List<JSONObject> {
@@ -123,7 +135,7 @@ class Discovery(private val client: NeoClient) {
         val pool = Executors.newFixedThreadPool(SCAN_PARALLEL)
         try {
             val tasks = hosts.map { h ->
-                Callable { client.hello(h, SCAN_TIMEOUT_MS)?.let { JSONObject().put("host", h).put("name", it.ifEmpty { h }) } }
+                Callable { helloAt(h, SCAN_TIMEOUT_MS) }
             }
             return pool.invokeAll(tasks, 15, TimeUnit.SECONDS).mapNotNull {
                 try {

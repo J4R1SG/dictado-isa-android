@@ -1,5 +1,5 @@
 {
- "user": "jaris",
+ "user": "doc",
  "password": "Prueba-123",
  "salt": "AAECAwQFBgcICQoLDA0ODw==",
  "iter": 4096,
@@ -7,12 +7,12 @@
  "snonce": "c2VydmVybm9uY2U3NjU0MzIx",
  "nonce": "Y2xpZW50bm9uY2UxMjM0NTY3c2VydmVybm9uY2U3NjU0MzIx",
  "cbdata": "6kU4rInTfdwKnOSpaDFeGK/4hbsePATPmQaJB7g/VEg=",
- "client_first_bare": "n=jaris,r=Y2xpZW50bm9uY2UxMjM0NTY3",
+ "client_first_bare": "n=doc,r=Y2xpZW50bm9uY2UxMjM0NTY3",
  "server_first": "r=Y2xpZW50bm9uY2UxMjM0NTY3c2VydmVybm9uY2U3NjU0MzIx,s=AAECAwQFBgcICQoLDA0ODw==,i=4096",
  "client_final_without_proof": "c=cD10bHMtc2VydmVyLWVuZC1wb2ludCws6kU4rInTfdwKnOSpaDFeGK/4hbsePATPmQaJB7g/VEg=,r=Y2xpZW50bm9uY2UxMjM0NTY3c2VydmVybm9uY2U3NjU0MzIx",
- "auth_message": "n=jaris,r=Y2xpZW50bm9uY2UxMjM0NTY3,r=Y2xpZW50bm9uY2UxMjM0NTY3c2VydmVybm9uY2U3NjU0MzIx,s=AAECAwQFBgcICQoLDA0ODw==,i=4096,c=cD10bHMtc2VydmVyLWVuZC1wb2ludCws6kU4rInTfdwKnOSpaDFeGK/4hbsePATPmQaJB7g/VEg=,r=Y2xpZW50bm9uY2UxMjM0NTY3c2VydmVybm9uY2U3NjU0MzIx",
+ "auth_message": "n=doc,r=Y2xpZW50bm9uY2UxMjM0NTY3,r=Y2xpZW50bm9uY2UxMjM0NTY3c2VydmVybm9uY2U3NjU0MzIx,s=AAECAwQFBgcICQoLDA0ODw==,i=4096,c=cD10bHMtc2VydmVyLWVuZC1wb2ludCws6kU4rInTfdwKnOSpaDFeGK/4hbsePATPmQaJB7g/VEg=,r=Y2xpZW50bm9uY2UxMjM0NTY3c2VydmVybm9uY2U3NjU0MzIx",
  "stored_key": "zc+G+12xyuhzvkJ2UOAMcMFZ92pfnvDJFwHzkFNlyHg=",
  "server_key": "UACHnzB1pgjG45ROkyBZpJmkSqFHmQ6kJbsSWLhHL8E=",
- "client_proof": "6upbRMHzUzlGlM7pjrEM7o1aASHfB/4yIg59Cg1JI2Q=",
- "server_signature": "3Vr17pdqvkDcE8yZnkl++Kv/c8kksRGbH6vDv7948D0="
+ "client_proof": "Quz6xXk6PDe1KoOgtuYowHxzUfN2w8HsU+H3EM9wdyg=",
+ "server_signature": "KAb/tU6rBSh1WksXVZU1foiZPOUr3bFO1DZ67Ha1+i8="
 }

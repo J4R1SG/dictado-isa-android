@@ -71,6 +71,9 @@ class NeoClient(
         return JSONObject().put("host", h).put("name", store.get(K_NAME) ?: h).put("port", currentPort())
     }
 
+    /** Port used when the PC announced none (8768 on a phone). */
+    val defaultPort: Int get() = port
+
     /** Port of the stored PC (movil_puerto on the PC), or the default. */
     private fun currentPort(): Int = HostFilter.validPort(store.get(K_PORT)?.toIntOrNull()) ?: port
 
@@ -204,21 +207,28 @@ class NeoClient(
         val (host, typedPort) = HostFilter.parseAddress(input)?.takeIf { allowHost(it.first) }
             ?: throw NeoError("Esa dirección no es de la red de la clínica. Debe ser como 192.168.x.x.")
         val explicit = typedPort ?: HostFilter.validPort(portArg) ?: discovered[host]
-        // Same PC as the stored one and no port given: keep using the port saved for it.
-        val sameHost = store.get(K_HOST) == host
-        val keptPort = if (sameHost) HostFilter.validPort(store.get(K_PORT)?.toIntOrNull()) else null
-        val p = explicit ?: keptPort ?: port
+        // Same PC as the stored one and no port given: try the port saved for it first. If the PC
+        // went back to the default port, the saved one fails and the default one is tried next.
+        val keptPort = if (explicit == null && store.get(K_HOST) == host)
+            HostFilter.validPort(store.get(K_PORT)?.toIntOrNull()) else null
+        val tries = if (explicit != null) listOf(explicit) else listOfNotNull(keptPort, port).distinct()
         val pin = pin()
         val trust = if (pin != null) PinnedTrust(pin) else CaptureTrust()
-        val name = try {
-            val r = request(host, "GET", "/api/v1/hola", null, trust, connectMs = 4000, readMs = 4000, port = p)
-            (if (r.code == 200) Bridge.parseHello(r.text) else null) ?: throw NeoError(MSG_RED)
-        } catch (e: NeoError) {
-            if (e.status == 495) throw e
-            throw NeoError(MSG_RED)
+        for ((i, p) in tries.withIndex()) {
+            val name = try {
+                val r = request(host, "GET", "/api/v1/hola", null, trust, connectMs = 4000, readMs = 4000, port = p)
+                (if (r.code == 200) Bridge.parseHello(r.text) else null) ?: throw NeoError(MSG_RED)
+            } catch (e: NeoError) {
+                if (e.status == 495) throw e
+                if (i == tries.lastIndex) throw NeoError(MSG_RED)
+                continue
+            }
+            // The default port is not stored, so a later default keeps working.
+            val keep = if (explicit == null && p == port) null else p.toString()
+            store.put(mapOf(K_HOST to host, K_NAME to name.ifEmpty { host }, K_PORT to keep))
+            return JSONObject().put("name", name.ifEmpty { host })
         }
-        store.put(mapOf(K_HOST to host, K_NAME to name.ifEmpty { host }, K_PORT to (explicit ?: keptPort)?.toString()))
-        return JSONObject().put("name", name.ifEmpty { host })
+        throw NeoError(MSG_RED)
     }
 
     // ---- login

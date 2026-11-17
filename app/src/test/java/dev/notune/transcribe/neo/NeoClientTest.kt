@@ -46,9 +46,11 @@ class NeoClientTest {
         throw AssertionError()
     }
 
+    private fun closedPort(): Int = java.net.ServerSocket(0, 1, java.net.InetAddress.getByName("127.0.0.1")).use { it.localPort }
+
     private fun connectAndLogin(): JSONObject {
         assertEquals("PC-PRUEBA", client.connect("127.0.0.1").getString("name"))
-        return client.login("Jaris", "Prueba-123")
+        return client.login("Doc", "Prueba-123")
     }
 
     @Test
@@ -71,7 +73,7 @@ class NeoClientTest {
     @Test
     fun loginPinsTheCertificateAndKeepsTheToken() {
         val u = connectAndLogin()
-        assertEquals("jaris", u.getString("user"))
+        assertEquals("doc", u.getString("user"))
         assertTrue(u.getBoolean("must_change"))
         assertEquals(Scram.b64(Pin.of(pc.certs.getValue("a"))), store.map[NeoClient.K_PIN])
         assertNotNull(store.map[NeoClient.K_TOKEN])
@@ -82,13 +84,13 @@ class NeoClientTest {
         assertEquals(client.deviceId(), body.getString("device"))
         assertEquals("Galaxy de prueba", body.getString("device_name"))
         assertFalse(fin.body.contains("Prueba-123"))
-        assertEquals("jaris", client.me()!!.getString("user"))
+        assertEquals("doc", client.me()!!.getString("user"))
     }
 
     @Test
     fun wrongPasswordStoresNothing() {
         client.connect("127.0.0.1")
-        val e = expectError { client.login("jaris", "otra-cosa-9") }
+        val e = expectError { client.login("doc", "otra-cosa-9") }
         assertEquals("Usuario o contraseña incorrectos.", e.message)
         assertEquals(401, e.status)
         assertNull(store.map[NeoClient.K_TOKEN])
@@ -99,7 +101,7 @@ class NeoClientTest {
     fun badServerSignatureMeansNotTheClinicPc() {
         client.connect("127.0.0.1")
         pc.badSignature = true
-        val e = expectError { client.login("jaris", "Prueba-123") }
+        val e = expectError { client.login("doc", "Prueba-123") }
         assertEquals(NeoClient.MSG_NO_ES, e.message)
         assertNull(store.map[NeoClient.K_TOKEN])
         assertNull(store.map[NeoClient.K_PIN])
@@ -111,7 +113,7 @@ class NeoClientTest {
         pc = FakePc(iterations = 4096)
         client = NeoClient(store, { "x" }, { it == "127.0.0.1" }, pc.port)
         client.connect("127.0.0.1")
-        val e = expectError { client.login("jaris", "Prueba-123") }
+        val e = expectError { client.login("doc", "Prueba-123") }
         assertEquals("No es la computadora de la clínica.", e.message)
         assertTrue(pc.seen.none { it.path == "/api/v1/login/fin" })
     }
@@ -120,7 +122,7 @@ class NeoClientTest {
     fun certificateChangedBetweenTheTwoStepsAbortsBeforeTheProof() {
         client.connect("127.0.0.1")
         pc.switchCertAfterInicio = "b"
-        val e = expectError { client.login("jaris", "Prueba-123") }
+        val e = expectError { client.login("doc", "Prueba-123") }
         assertEquals(NeoClient.MSG_NO_ES, e.message)
         assertTrue(pc.seen.none { it.path == "/api/v1/login/fin" })
         assertNull(store.map[NeoClient.K_TOKEN])
@@ -139,14 +141,14 @@ class NeoClientTest {
         assertTrue(pc.seen.none { it.cert == "b" })
         // A new login against the different certificate is refused before any proof is sent.
         val before = pc.seen.size
-        val e2 = expectError { client.login("jaris", "Prueba-123") }
+        val e2 = expectError { client.login("doc", "Prueba-123") }
         assertEquals(NeoClient.MSG_OTRA_PC, e2.message)
         assertEquals(495, e2.status)
         assertTrue(pc.seen.drop(before).none { it.path == "/api/v1/login/fin" })
         assertEquals(Scram.b64(Pin.of(pc.certs.getValue("a"))), store.map[NeoClient.K_PIN])
         // Same after a logout (the pin outlives the session).
         client.logout()
-        assertTrue(expectError { client.login("jaris", "Prueba-123") }.status == 495)
+        assertTrue(expectError { client.login("doc", "Prueba-123") }.status == 495)
         // Connecting again is refused too, until the doctor forgets the PC.
         assertEquals(495, expectError { client.connect("127.0.0.1") }.status)
         client.forget()
@@ -154,7 +156,7 @@ class NeoClientTest {
         assertNull(store.map[NeoClient.K_PIN])
         assertNull(store.map[NeoClient.K_TOKEN])
         client.connect("127.0.0.1")
-        client.login("jaris", "Prueba-123")
+        client.login("doc", "Prueba-123")
         assertEquals(Scram.b64(Pin.of(pc.certs.getValue("b"))), store.map[NeoClient.K_PIN])
         assertNotNull(client.api("GET", "/api/v1/consultas?date=11-16-2026", null))
     }
@@ -165,8 +167,8 @@ class NeoClientTest {
         assertEquals("PC-PRUEBA", c.connect("127.0.0.1:${pc.port}").getString("name"))
         assertEquals(pc.port.toString(), store.map[NeoClient.K_PORT])
         assertEquals(pc.port, c.last()!!.getInt("port"))
-        assertEquals("jaris", c.login("jaris", "Prueba-123").getString("user"))
-        assertEquals("jaris", c.me()!!.getString("user"))
+        assertEquals("doc", c.login("doc", "Prueba-123").getString("user"))
+        assertEquals("doc", c.me()!!.getString("user"))
     }
 
     @Test
@@ -184,6 +186,34 @@ class NeoClientTest {
         val c = NeoClient(store, { "x" }, { it == "127.0.0.1" }, 8768)
         c.connect("127.0.0.1", pc.port)
         assertEquals(pc.port.toString(), store.map[NeoClient.K_PORT])
+    }
+
+    @Test
+    fun staleStoredPortFallsBackToTheDefaultPort() {
+        // The PC was on another port before and went back to the default one.
+        store.map[NeoClient.K_HOST] = "127.0.0.1"
+        store.map[NeoClient.K_PORT] = closedPort().toString()
+        assertEquals("PC-PRUEBA", client.connect("127.0.0.1").getString("name"))
+        assertNull(store.map[NeoClient.K_PORT]) // the default is not stored
+        assertEquals(pc.port, client.last()!!.getInt("port"))
+        assertEquals("doc", client.login("doc", "Prueba-123").getString("user"))
+    }
+
+    @Test
+    fun defaultPortFallbackStillNeedsThePinnedCertificate() {
+        connectAndLogin()
+        store.map[NeoClient.K_PORT] = closedPort().toString()
+        pc.cert = "b"
+        assertEquals(495, expectError { client.connect("127.0.0.1") }.status)
+        assertTrue(pc.seen.none { it.cert == "b" })
+    }
+
+    @Test
+    fun typedPortIsNotSwappedForTheDefault() {
+        // A port typed by the doctor is the only one tried.
+        val e = expectError { client.connect("127.0.0.1:${closedPort()}") }
+        assertEquals(NeoClient.MSG_RED, e.message)
+        assertNull(store.map[NeoClient.K_HOST])
     }
 
     @Test
@@ -274,8 +304,8 @@ class NeoClientTest {
         assertEquals(16, Scram.unb64(b.getString("new_salt"))!!.size)
         assertFalse(client.me()!!.getBoolean("must_change"))
         client.logout()
-        client.login("jaris", "Gatito-Feliz-42")
-        expectError { client.login("jaris", "Prueba-123") }
+        client.login("doc", "Gatito-Feliz-42")
+        expectError { client.login("doc", "Prueba-123") }
     }
 
     @Test
