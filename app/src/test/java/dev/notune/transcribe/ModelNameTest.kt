@@ -11,7 +11,7 @@ class ModelNameTest {
         assertEquals("model.gguf", ModelStore.safeModelName("model.gguf"))
         assertEquals("model.gguf", ModelStore.safeModelName("primary:Download/model.gguf"))
         assertEquals("x.gguf", ModelStore.safeModelName("../x.gguf"))
-        assertEquals("x.gguf", ModelStore.safeModelName("a\b\x.gguf"))
+        assertEquals("x.gguf", ModelStore.safeModelName("a" + 92.toChar() + "b" + 92.toChar() + "x.gguf"))
         assertNull(ModelStore.safeModelName(null))
         assertNull(ModelStore.safeModelName("model.txt"))
         assertNull(ModelStore.safeModelName(".hidden.gguf"))
