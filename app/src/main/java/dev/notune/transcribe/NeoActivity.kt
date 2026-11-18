@@ -32,6 +32,7 @@ import android.widget.FrameLayout
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.webkit.JavaScriptReplyProxy
 import androidx.webkit.WebViewAssetLoader
@@ -103,6 +104,10 @@ class NeoActivity : AppCompatActivity() {
         web.importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS
         root.addView(web, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         setContentView(root)
+        // Every Android version takes the same path: the window is never resized by the system, the page is
+        // padded by the insets below (bars, notch and keyboard). Without this, Android 8-14 mixed the old
+        // "adjustResize" with the inset padding and a field being typed could end up under the keyboard.
+        WindowCompat.setDecorFitsSystemWindows(window, false)
         // targetSdk 36 draws edge to edge: keep the page clear of the bars, the notch and the keyboard.
         ViewCompat.setOnApplyWindowInsetsListener(root) { v, insets ->
             val b = insets.getInsets(

@@ -14,6 +14,8 @@ const ESC = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ESC[c]);
 const MSG_FALLA = 'Algo falló. Intenta otra vez.';
 const MSG_NOAPP = 'Esta pantalla solo funciona dentro de la app Neo Records.';
+const MSG_EDITANDO = 'Primero toca «Listo» o «Cancelar» en la tarjeta que estás editando.';
+const MSG_GUARDANDO = 'Espera: esa parte se está guardando en Neo.';
 const MSG_RED = 'La computadora no contestó. Revisa que esté prendida y que el teléfono esté en el wifi de la clínica.';
 
 const ICONS = {
@@ -28,7 +30,7 @@ const ICONS = {
   grid: '<rect x="4" y="4" width="7" height="7" rx="1"/><rect x="13" y="4" width="7" height="7" rx="1"/><rect x="4" y="13" width="7" height="7" rx="1"/><rect x="13" y="13" width="7" height="7" rx="1"/>',
   clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>', heart: '<path d="M12 20s-8-5-8-11a4.5 4.5 0 018-2.7A4.5 4.5 0 0120 9c0 6-8 11-8 11z"/>',
   note: '<path d="M6 3h9l4 4v14H6zM14 3v5h5M9 13h7M9 17h7"/>', send: '<path d="M4 12l16-8-6 16-3-7-7-1z"/>', doc: '<path d="M6 3h9l4 4v14H6zM14 3v5h5"/>',
-  user: '<circle cx="12" cy="8" r="4"/><path d="M4 21c1-4 4-6 8-6s7 2 8 6"/>', wifi: '<path d="M2 9a15 15 0 0120 0M5 13a10 10 0 0114 0M8.5 16.5a5 5 0 017 0M12 20h.01"/>',
+  user: '<circle cx="12" cy="8" r="4"/><path d="M4 21c1-4 4-6 8-6s7 2 8 6"/>', pin: '<path d="M12 16v6M8 3h8l-1 6 4 4v3H5v-3l4-4-1-6z"/>', wifi: '<path d="M2 9a15 15 0 0120 0M5 13a10 10 0 0114 0M8.5 16.5a5 5 0 017 0M12 20h.01"/>',
 };
 const ic = (n) => '<svg viewBox="0 0 24 24" aria-hidden="true">' + (ICONS[n] || '') + '</svg>';
 const PAW = '<svg class="paw" viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="20" r="6"/><circle cx="9" cy="12" r="3"/><circle cx="14" cy="8" r="3"/><circle cx="19" cy="8" r="3"/><circle cx="24" cy="12" r="3"/></svg>';
@@ -178,15 +180,15 @@ function stashNota() {
     if (N.sentOk) text = text === sent ? '' : text.startsWith(sent) ? text.slice(sent.length).trim() : text;     // la PC confirmó que la tiene (la IA aún piensa): no se guarda, o volvería al cuadro y se mandaría dos veces
     else if (text.trim()) unsure = { sent, snap: N.snap };                                                         // no se sabe si llegó (falló el wifi): se guarda todo y al reabrir se compara con el borrador de la PC
   }
-  if (!text.trim() && !N.edit) return;
-  S.keep[keepKey(N)] = { user: S.user.user, text, typing: N.typing, unsure, edit: N.edit ? Object.assign({}, N.edit, { busy: false }) : null };
+  if (!text.trim() && !N.edit && !N.pin) return;
+  S.keep[keepKey(N)] = { user: S.user.user, text, typing: N.typing, unsure, edit: N.edit ? Object.assign({}, N.edit, { busy: false }) : null, pin: N.pin || null };
 }
 function unstashNota(N) {
   const k = S.keep[keepKey(N)];
   if (!k) return;
   delete S.keep[keepKey(N)];
   if (!S.user || k.user !== S.user.user) return;
-  N.text = k.text; N.typing = !!k.typing || !!k.text; N.edit = k.edit; N.unsure = k.unsure || null;
+  N.text = k.text; N.typing = !!k.typing || !!k.text; N.edit = k.edit; N.unsure = k.unsure || null; N.pin = k.pin || null;
 }
 function settleUnsure(N) {                // la PC ¿usó la respuesta que se guardó sin saber si llegó? si el borrador cambió, sí: se quita del cuadro
   const u = N.unsure; N.unsure = null;
@@ -425,7 +427,7 @@ async function loadDraftInfo(K) {      // solo para decir «Seguir con la nota»
     const br = await api('GET', '/api/v1/borrador?date=' + dayKey(S.day) + '&id=' + encodeURIComponent(K.id));
     const d = br && br.draft;
     if (!d) return;
-    const started = !!(br.turn || Object.keys(d.text_es || {}).length || (d.saved || []).length || (d.objective || []).length || d.subjective || (d.assessment || []).length || (d.plan_items || []).length || (d.home_items || []).length || d.recheck);
+    const started = !!(br.turn || Object.keys(d.text_es || {}).length || (d.saved || []).length || (d.objective || []).length || d.objective_tests || d.subjective || (d.assessment || []).length || (d.plan_items || []).length || (d.home_items || []).length || d.recheck);
     K.draftInfo = { state: d.terminada ? 'terminada' : started ? 'empezada' : '' };
     if (S.cons === K && S.screen === 'consulta') render();
   } catch (e) { /* queda el texto de siempre */ }
@@ -529,7 +531,7 @@ const LIST_SEC = { A: 1, P: 1, Anestesia: 1, Home: 1 };
 
 function newNota(id) {
   return { cid: id, day: dayKey(S.day), c: null, draft: null, turn: null, loaded: false, loading: true, err: '', busy: '', last: null, target: null, localQ: null, skip: [], text: '', typing: false,
-    edit: null, changed: [], saving: {}, finishing: false, finished: false, finishErr: '', saveErr: {}, warn: {}, job: 0, jobLost: false, sentRaw: null, sentOk: false, unsure: null, snap: '' };
+    edit: null, changed: [], saving: {}, finishing: false, finished: false, finishErr: '', saveErr: {}, warn: {}, job: 0, jobLost: false, sentRaw: null, sentOk: false, unsure: null, snap: '', pin: null, saveAll: null };
 }
 async function openNota() {
   const c = S.cons && S.cons.c;
@@ -603,7 +605,8 @@ function applyTurn(turn, resume) {
   N.pvFresh = !resume;            // el texto de «preview» solo vale en un turno recién hecho (después de editar o al reabrir queda viejo)
   if (turn.draft) N.draft = turn.draft;
   N.busy = ''; N.err = ''; N.localQ = null;
-  N.target = (turn.question && turn.question.section) || null;
+  pinCheck(N);
+  N.target = N.pin || (turn.question && turn.question.section) || null;          // con una tarjeta marcada, la pregunta de la IA no cambia el destino
   N.changed = Array.isArray(turn.changed) ? turn.changed : [];
   render();
   if (!resume) setTimeout(() => { const m = $('#main'); if (m) m.scrollTo({ top: 0 }); }, 0);
@@ -620,7 +623,7 @@ function afterSent(N) {                 // lo que escribió la doctora mientras 
 function unsend(N) { if (N.sentRaw != null) { N.refusedRaw = N.sentRaw; N.sentRaw = null; } N.sentOk = false; }      // el trabajo acabó mal: la IA no usó esa respuesta, sigue siendo texto sin mandar (Reintentar la vuelve a mandar)
 function startJob(payload, retry) {
   const N = S.nota;
-  const body = Object.assign({ date: dayKey(S.day), id: N.cid, answer_es: '', target: null, skip: N.skip.slice(), edits: {}, start: false }, payload);
+  const body = Object.assign({ date: dayKey(S.day), id: N.cid, answer_es: '', target: null, skip: N.skip.slice(), edits: {}, start: false, solo: false }, payload);
   N.last = body; N.busy = 'ia'; N.err = ''; N.job = 0; N.jobLost = false; N.failSince = 0; N.sentOk = false;
   if (!retry) { N.snap = snapText(N); N.dirty = false; N.refusedRaw = null; }
   render();
@@ -669,15 +672,20 @@ function pollJob(N, job, fails) {
 }
 async function retryJob() {
   const N = S.nota;
-  if (!N || N.edit) return;                         // con una tarjeta abierta para editar no se reintenta: la IA podría cambiarla
+  if (!N || N.edit || N.saveAll) return;           // con una tarjeta abierta o mientras «Guardar todo» manda secciones no se reintenta
   if (!N.last) { loadNota(); return; }
+  const tg = N.last.solo && N.last.target;
+  if (tg && !(N.job && N.jobLost) && (N.saving[tg] || secState(tg).pending)) { toast(MSG_GUARDANDO); return; }    // la tarjeta marcada se está guardando: esa respuesta no tendría dónde ir
   N.busy = 'ia'; N.err = ''; render();
   if (N.job && N.jobLost) { N.jobLost = false; pollJob(N, N.job, 0); return; }      // el trabajo sigue en la PC: se espera ese, no se manda otra vez
+  let br = null;
   try {                                                         // ¿la PC ya procesó esa respuesta y solo se perdió el aviso? entonces no se manda dos veces
-    const br = await api('GET', '/api/v1/borrador?date=' + dayKey(S.day) + '&id=' + encodeURIComponent(N.cid));
+    br = await api('GET', '/api/v1/borrador?date=' + dayKey(S.day) + '&id=' + encodeURIComponent(N.cid));
     if (S.nota !== N) return;
     if (br.turn && br.draft && JSON.stringify(br.draft.text_es || {}) !== N.snap) { N.job = 0; N.refusedRaw = null; afterSent(N); applyTurn(N.dirty ? Object.assign({}, br.turn, { draft: br.draft }) : br.turn, !!N.dirty); return; }
   } catch (e) { if (S.nota !== N || e.handled) return; N.busy = ''; N.err = errText(e); render(); return; }
+  if (br && br.draft) { N.draft = br.draft; if (N.turn) N.turn.draft = br.draft; }
+  if (tg && secState(tg).locked) { N.last = Object.assign({}, N.last, { solo: false, target: null }); pinCheck(N); }    // la tarjeta marcada ya se guardó: la respuesta va sin marca (la PC no dejaría escribir ahí)
   if (N.sentRaw == null && N.refusedRaw != null) N.sentRaw = N.refusedRaw;      // se vuelve a mandar la misma respuesta: ahora sí se puede quitar del cuadro
   N.refusedRaw = null;
   startJob(N.last, true);
@@ -685,12 +693,17 @@ async function retryJob() {
 function sendAnswer(text, opts) {
   const N = S.nota;
   if (!N || N.busy) return;
-  if (N.edit) { toast('Primero toca «Listo» o «Cancelar» en la tarjeta que estás editando.'); return; }
+  if (N.edit) { toast(MSG_EDITANDO); return; }
+  if (N.saveAll) { toast('Espera un momento: estoy mandando las secciones a Neo.'); return; }
+  if (N.pin && (N.saving[N.pin] || secState(N.pin).pending)) { toast(MSG_GUARDANDO); return; }        // lo escrito se queda en el cuadro
+  if (N.pin && secState(N.pin).locked) { unpin(N); render(); toast('Esa parte ya está guardada en Neo. Quité la marca. Manda otra vez.'); return; }
+  pinCheck(N);
   const q = N.localQ;
   let a = String(text || '').trim();
-  if (q && a) a = 'Sobre «' + q.text_es + '»: ' + a;
+  if (q && a && !(N.pin && q.section && q.section !== N.pin)) a = 'Sobre «' + q.text_es + '»: ' + a;      // la sugerencia es de otra parte: no se mezcla con la tarjeta marcada
   if (opts && opts.skipAbout) { if (N.skip.indexOf(opts.skipAbout) < 0) N.skip.push(opts.skipAbout); }
   N.sentRaw = opts && opts.fromBox ? String(N.text || '') : null;
+  if (N.pin) { startJob({ answer_es: a, target: N.pin, solo: true }); return; }        // tarjeta marcada: todo va solo ahí (la PC no deja cambiar las otras)
   startJob({ answer_es: a, target: N.target && !secState(N.target).locked ? N.target : null });
 }
 function skipQuestion() {
@@ -698,10 +711,20 @@ function skipQuestion() {
   if (!q) return;
   sendAnswer('', { skipAbout: q.about });
 }
+// Tocar una tarjeta la marca: todo lo que se diga va solo ahí hasta quitarla (otro toque, «Quitar», guardarla o terminar la nota).
+const askedSec = (N) => (N.localQ && N.localQ.section) || (N.turn && N.turn.question && N.turn.question.section) || null;
+function unpin(N) { N.pin = null; const s = askedSec(N); N.target = s && !secState(s).locked ? s : null; }
+const NO_PIN = 'Vitales';                // los vitales no se marcan: el toque solo dice a dónde va lo próximo (como antes)
+function pinCheck(N) { if (N && N.pin && (N.pin === NO_PIN || noteClosed() || secState(N.pin).locked || sections().indexOf(N.pin) < 0)) unpin(N); }
 function setTarget(sec) {
   const N = S.nota;
+  if (!N || N.edit) { if (N && N.edit && N.edit.sec !== sec) toast(MSG_EDITANDO); return; }     // con una tarjeta abierta para editar, tocar no marca nada
   if (secState(sec).locked) { toast('Esa parte ya está guardada en Neo.'); return; }
-  N.target = N.target === sec ? null : sec; render();
+  if (N.pin === sec) unpin(N);
+  else if (N.saving[sec] || secState(sec).pending) { toast(MSG_GUARDANDO); return; }
+  else if (sec === NO_PIN) { N.pin = null; N.target = N.target === sec ? null : sec; }
+  else { N.pin = sec; N.target = sec; if (N.localQ && N.localQ.section !== sec) N.localQ = null; }      // la sugerencia era de otra parte: se quita
+  render();
 }
 
 // --- estado de cada tarjeta
@@ -719,7 +742,7 @@ function secState(sec) {
 }
 function filled(sec) {
   const d = (S.nota && S.nota.draft) || {};
-  if (sec === 'O') return !!((d.objective || []).length || d.objective_rest_normal);
+  if (sec === 'O') return !!((d.objective || []).length || d.objective_rest_normal || testsText(d));
   if (sec === 'Vitales') return VITALS.some((v) => (d.vitals || {})[v[0]] != null);
   const v = d[SECTION_KEY[sec]];
   return Array.isArray(v) ? v.length > 0 : !!(v && String(v).trim());
@@ -735,16 +758,19 @@ function oText() {
   const d = (S.nota && S.nota.draft) || {};
   const l = (d.objective || []).map((f) => f.row + ': ' + f.state + (f.note ? ' - ' + f.note : ''));
   if (d.objective_rest_normal) l.push('Lo demás: WNL');
+  if (testsText(d)) l.push("Doctor's Notes: " + testsText(d));
   return l;
 }
+// Notas del doctor (fila «Doctor's Notes» de la O): tests, lo que vio y otras notas (texto en inglés, completo). La PC puede mandarlo como texto o como lista de renglones.
+const testsText = (d) => { const v = d && (d.objective_tests != null ? d.objective_tests : d.tests); return String(Array.isArray(v) ? v.join('\n') : (v || '')).trim(); };
 
 // --- editar a mano
 function startEdit(sec) {
   const N = S.nota, d = N.draft || {};
-  if (secState(sec).locked || aiBusy() || N.saving[sec] || secState(sec).pending) return;
-  if (N.edit) { toast('Primero toca «Listo» o «Cancelar» en la tarjeta que estás editando.'); return; }
+  if (secState(sec).locked || aiBusy() || N.saving[sec] || secState(sec).pending || N.saveAll) return;
+  if (N.edit) { toast(MSG_EDITANDO); return; }
   const e = { sec };
-  if (sec === 'O') { e.rows = {}; (d.objective || []).forEach((f) => { e.rows[f.row] = { state: f.state, note: f.note || '' }; }); e.rest = !!d.objective_rest_normal; }
+  if (sec === 'O') { e.rows = {}; (d.objective || []).forEach((f) => { e.rows[f.row] = { state: f.state, note: f.note || '' }; }); e.rest = !!d.objective_rest_normal; e.tests = testsText(d); }
   else if (sec === 'Vitales') { e.vit = {}; VITALS.forEach((v) => { const x = (d.vitals || {})[v[0]]; e.vit[v[0]] = x == null ? '' : String(x); }); }
   else if (LIST_SEC[sec]) { const v = d[SECTION_KEY[sec]]; e.text = (Array.isArray(v) ? v : []).join('\n'); }
   else { e.text = d[SECTION_KEY[sec]] || ''; }
@@ -752,7 +778,8 @@ function startEdit(sec) {
 }
 function editValue(e) {
   if (e.sec === 'O') {
-    return { objective: O_ROWS.filter((r) => e.rows[r] && e.rows[r].state).map((r) => ({ row: r, state: e.rows[r].state, note: (e.rows[r].note || '').trim() })), objective_rest_normal: !!e.rest };
+    return { objective: O_ROWS.filter((r) => e.rows[r] && e.rows[r].state).map((r) => ({ row: r, state: e.rows[r].state, note: (e.rows[r].note || '').trim() })), objective_rest_normal: !!e.rest,
+      objective_tests: String(e.tests || '').split('\n').map((x) => x.trim()).filter(Boolean).join('\n') };
   }
   if (e.sec === 'Vitales') {
     const o = {};
@@ -777,16 +804,18 @@ async function saveEdit() {
 }
 
 // --- guardar sección y terminar
-async function saveSection(sec) {
+async function saveSection(sec) {           // devuelve true si la PC la recibió para mandarla a Neo
   const N = S.nota;
-  if (aiBusy() || N.saving[sec]) return;
-  if (N.edit && N.edit.sec === sec) { N.saveErr[sec] = 'Primero toca «Listo» para terminar de editar.'; render(); return; }
+  if (aiBusy() || N.saving[sec]) return false;
+  if (N.edit && N.edit.sec === sec) { N.saveErr[sec] = 'Primero toca «Listo» para terminar de editar.'; render(); return false; }
   N.saving[sec] = true; N.saveErr[sec] = ''; N.warn[sec] = ''; render();
+  let ok = false;
   try {
     const r = await api('POST', '/api/v1/guardar-seccion', { date: dayKey(S.day), id: N.cid, section: sec });
     addLocalCola(r.qid, sec);
     if (r.warning) N.warn[sec] = r.warning;
-    N.dirty = true;
+    N.dirty = true; ok = true;
+    if (N.pin === sec) unpin(N);                  // ya va para Neo: deja de estar marcada
     refreshNota();
   } catch (e) {
     if (!e.handled) {
@@ -794,26 +823,63 @@ async function saveSection(sec) {
       if (!(e.status === 409 && /ya está guardada/i.test(e.message || ''))) N.saveErr[sec] = errText(e);
       N.dirty = true;
       await refreshNota();
-      if (S.nota === N) { ensureCola(true); if (secState(sec).locked) N.saveErr[sec] = ''; }
+      if (S.nota === N) { ensureCola(true); if (secState(sec).locked && !noteClosed()) { N.saveErr[sec] = ''; ok = true; } pinCheck(N); }
     }
   }
   N.saving[sec] = false; render();
+  return ok;
+}
+// «Guardar todo en Neo»: las secciones con texto que faltan, una tras otra, con el mismo «Guardar sección» de cada tarjeta.
+const saveAllList = (N) => sections().filter((s) => filled(s) && !secState(s).locked && !secState(s).pending && !N.saving[s]);
+const canSaveAll = (N) => !N.saveAll && !N.finishing && !aiBusy() && !N.edit && !noteClosed() && saveAllList(N).length > 0;
+async function saveAll() {
+  const N = S.nota;
+  if (!N || N.saveAll || noteClosed()) return;
+  if (N.edit) { toast(MSG_EDITANDO); return; }
+  if (aiBusy()) return;
+  const list = saveAllList(N);
+  if (!list.length) return;
+  N.saveAll = { i: 0, n: list.length };
+  let sent = 0, bad = 0;
+  const left = [];                                                           // las que no se mandaron y no tienen aviso en su tarjeta
+  for (let k = 0; k < list.length; k++) {
+    if (S.nota !== N || aiBusy() || noteClosed()) { left.push(...list.slice(k)); break; }
+    N.saveAll.i = k + 1; render();
+    const st = secState(list[k]);
+    if (st.locked || st.pending) { sent++; continue; }                      // ya va para Neo: no se manda dos veces
+    if (await saveSection(list[k])) sent++;
+    else if (S.nota === N && N.saveErr[list[k]]) bad++;                      // falló y su tarjeta lo dice
+    else left.push(list[k]);
+  }
+  if (S.nota !== N) return;
+  N.saveAll = null; render();
+  const sec = (n) => n + (n === 1 ? ' sección' : ' secciones');
+  if (sent === list.length) { toast('Listo: mandé ' + sec(sent) + ' a Neo.'); return; }
+  const t = [];
+  if (sent) t.push('Mandé ' + sec(sent) + ' a Neo.');
+  if (bad) t.push(bad === list.length ? 'No se pudo mandar nada a Neo. Mira el aviso en cada tarjeta.' : (bad === 1 ? 'Una no se pudo' : bad + ' no se pudieron') + ': mira el aviso en su tarjeta.');
+  if (left.length) t.push('No se mandaron todavía: ' + left.map((x) => SEC_SHORT[x]).join(', ') + '.');
+  toast(t.join(' '));
+}
+function saveAllBtn(N) {
+  const s = N.saveAll;
+  return '<button class="btn save block" id="saveAllBtn" data-act="saveAll"' + (canSaveAll(N) ? '' : ' disabled') + '>' + (s ? spin() + 'Guardando ' + s.i + ' de ' + s.n + '…' : 'Guardar todo en Neo') + '</button>';
 }
 function askFinish() {
   const N = S.nota;
-  if (!N || aiBusy() || N.edit || N.finishing) return;
+  if (!N || aiBusy() || N.edit || N.finishing || N.saveAll) return;
   const wait = sections().filter((s) => filled(s) && (secState(s).pending || N.saving[s]));          // ya mandadas: se están guardando
   const open = sections().filter((s) => filled(s) && !secState(s).locked && wait.indexOf(s) < 0);
   let t = open.length
     ? 'Estas secciones tienen texto pero no las has guardado en Neo: ' + open.map((s) => SEC_SHORT[s]).join(', ') + '. Si terminas ahora, se perderán.'
     : 'Se guardará lo que falta y se agregará lo que el cliente declinó. Después ya no se puede cambiar desde aquí.';
   if (wait.length) t += ' Estas ya las mandaste y se están guardando: ' + wait.map((s) => SEC_SHORT[s]).join(', ') + '.';
-  S.sheet = { type: 'confirm', title: 'Terminar la nota', text: t, ok: open.length ? 'Terminar así' : 'Sí, terminar', act: 'doFinish', cancel: open.length ? 'Volver y guardar' : 'Todavía no', cancelAct: open.length ? 'goSave' : '', first: open[0] || '', bad: open.length > 0 };
+  S.sheet = { type: 'confirm', title: 'Terminar la nota', text: t, ok: open.length ? 'Terminar así' : 'Sí, terminar', act: 'doFinish', cancel: open.length ? 'Guardar todo primero' : 'Todavía no', cancelAct: open.length ? 'saveAllFirst' : '', first: open[0] || '', bad: open.length > 0 };
   render();
 }
 async function doFinish() {
   const N = S.nota; S.sheet = null;
-  if (aiBusy() || N.edit) { render(); return; }
+  if (aiBusy() || N.edit || N.saveAll) { render(); return; }
   N.finishing = true; N.finishErr = ''; render();
   try {
     const r = await api('POST', '/api/v1/terminar', { date: dayKey(S.day), id: N.cid });
@@ -1026,7 +1092,7 @@ function vConsulta() {
   const soap = c.soap || {};
   const cell = (lab, v) => '<div class="cell"><p class="lab">' + esc(lab) + '</p><div class="v' + (v && String(v).trim() ? '' : ' empty') + ' en" lang="en">' + (v && String(v).trim() ? esc(v) : 'Vacío') + '</div></div>';
   if (c.has_soap) {
-    m += '<div class="card"><h3>Lo que hay en Neo</h3>' + cell('S · Motivo', soap.s) + cell('A · Diagnóstico', soap.a) + cell('P · Plan', soap.p) + cell('Recheck', soap.recheck) + '</div>';
+    m += '<div class="card"><h3>Lo que hay en Neo</h3>' + cell('S · Motivo', soap.s) + (testsText({ tests: soap.tests }) ? cell("O · Doctor's Notes", testsText({ tests: soap.tests })) : '') + cell('A · Diagnóstico', soap.a) + cell('P · Plan', soap.p) + cell('Recheck', soap.recheck) + '</div>';
     m += '<div class="card"><h3>O · Examen</h3>' + oGridNeo(c) + '</div>';
   } else if ((c.notes_text || '').trim()) {
     m += '<div class="card"><h3>Nota en Neo</h3><div class="v en" lang="en">' + esc(c.notes_text) + '</div></div>';
@@ -1065,7 +1131,8 @@ function oCard(sec, st) {
       const cur = ed.rows[r] || { state: '', note: '' };
       return '<div class="r"><p class="n">' + esc(r) + '</p><div class="opts">' + O_STATES.map((s) => '<button class="opt ' + s + '" data-act="oState" data-row="' + esc(r) + '" data-state="' + s + '" aria-pressed="' + (cur.state === s) + '">' + s + '</button>').join('') + '</div>' +
         (cur.state === 'Abnormal' ? '<input class="input" data-bind="oNote" data-key="' + esc(r) + '" value="' + esc(cur.note) + '" placeholder="¿Qué se vio?" aria-label="Nota de ' + esc(r) + '">' : '') + '</div>';
-    }).join('') + '<label class="small"><input type="checkbox" data-bind="oRest"' + (ed.rest ? ' checked' : '') + '> Lo demás está normal (WNL)</label></div>';
+    }).join('') + '<label class="small"><input type="checkbox" data-bind="oRest"' + (ed.rest ? ' checked' : '') + '> Lo demás está normal (WNL)</label>' +
+      '<label class="field otests"><span>' + O_TESTS + '</span><textarea class="input" id="editTests" data-bind="edit.tests" lang="en" placeholder="Resultados de tests, lo que viste y otras notas (inglés)">' + esc(ed.tests || '') + '</textarea></label></div>';
   }
   const rows = O_ROWS.map((r) => {
     const neo = (c.o_rows || {})[r] || {};
@@ -1077,8 +1144,11 @@ function oCard(sec, st) {
     else chip = '<span class="chip dim">—</span>';
     return '<div class="r"><span class="n">' + esc(r) + '</span><span>' + chip + '</span>' + (note ? '<span class="note en" lang="en">' + esc(note) + '</span>' : '') + '</div>';
   }).join('');
-  return '<div class="ogrid">' + rows + '</div>' + (d.objective_rest_normal ? '<p class="hint">«Lo demás normal»: las filas sin nota se escriben como WNL.</p>' : '');
+  const tt = testsText(d);
+  return '<div class="ogrid">' + rows + '</div>' + (d.objective_rest_normal ? '<p class="hint">«Lo demás normal»: las filas sin nota se escriben como WNL.</p>' : '') +
+    (tt ? '<div class="otests"><p class="lab">' + O_TESTS + '</p><p class="en" lang="en">' + esc(tt) + '</p></div>' : '');
 }
+const O_TESTS = 'Notas del doctor: tests, lo que viste y otras notas';
 function vitCard() {
   const N = S.nota, d = N.draft || {}, c = N.c || {};
   const ed = N.edit && N.edit.sec === 'Vitales' ? N.edit : null;
@@ -1112,9 +1182,11 @@ function card(sec) {
   const tg = tagOf(st.status);
   const chip = st.status ? '<span class="tag ' + tg[1] + '">' + (st.status === 'guardando' ? spin() : '') + esc(tg[0]) + '</span>' : (N.saving[sec] ? '<span class="tag pen">' + spin() + 'Enviando…</span>' : '');
   const lockAI = aiBusy();
-  const cls = 'ncard' + (isT ? ' target' : '') + (st.done ? ' saved' : '') + (N.changed.indexOf(sec) >= 0 ? ' changed' : '');
+  const isP = N.pin === sec && !st.locked && !noteClosed();
+  const cls = 'ncard' + (isT ? ' target' : '') + (isP ? ' pinned' : '') + (st.done ? ' saved' : '') + (N.changed.indexOf(sec) >= 0 ? ' changed' : '');
   let h = '<article class="' + cls + '" data-act="target" data-sec="' + sec + '" id="card-' + sec + '"><div class="nhead"><h3>' + esc(SEC_TITLE[sec]) + '</h3>' + chip + '</div>';
-  if (isT && !st.locked) h += '<p class="here">' + ic('mic') + 'Aquí va lo que digas</p>';
+  if (isP) h += '<div class="pinline">' + ic('pin') + '<span>Marcada: todo lo que digas va solo aquí</span><button class="btn ghost small" data-act="unpin" aria-label="Quitar la marca de ' + esc(SEC_SHORT[sec]) + '">Quitar</button></div>';
+  else if (isT && !st.locked) h += '<p class="here">' + ic('mic') + 'Aquí va lo que digas</p>';
   h += bodyCard(sec);
   if (es && !ed) h += '<p class="es">Lo que dijiste: «' + esc(es) + '»</p>';
   if (st.done) h += '<div class="msg ok">' + ic('lock') + '<span><b>Guardada en Neo.</b> Ya no se puede cambiar desde aquí.</span></div>';
@@ -1126,20 +1198,22 @@ function card(sec) {
   h += '<div class="nfoot">';
   if (ed) h += '<button class="btn save" data-act="editOk"' + ((N.edit.busy || lockAI) ? ' disabled' : '') + '>' + (N.edit.busy ? spin() + 'Guardando…' : 'Listo') + '</button><button class="btn ghost" data-act="editCancel">Cancelar</button>';
   else {
-    h += '<button class="btn ghost" data-act="edit" data-sec="' + sec + '"' + ((st.locked || lockAI || N.saving[sec] || st.pending || N.edit) ? ' disabled' : '') + '>' + ic('edit') + 'Editar</button>';
+    h += '<button class="btn ghost" data-act="edit" data-sec="' + sec + '"' + ((st.locked || lockAI || N.saving[sec] || st.pending || N.edit || N.saveAll) ? ' disabled' : '') + '>' + ic('edit') + 'Editar</button>';
     const busy = N.saving[sec] || st.pending;
-    h += '<button class="btn save' + (ready ? ' ready' : '') + '" data-act="save" data-sec="' + sec + '"' + ((st.locked || busy || lockAI || !filled(sec)) ? ' disabled' : '') + '>' + (busy ? spin() + 'Guardando…' : (st.locked ? (st.error ? 'Revisar en Neo' : 'Guardada') : 'Guardar sección')) + '</button>';
+    h += '<button class="btn save' + (ready ? ' ready' : '') + '" data-act="save" data-sec="' + sec + '"' + ((st.locked || busy || lockAI || !filled(sec) || N.saveAll) ? ' disabled' : '') + '>' + (busy ? spin() + 'Guardando…' : (st.locked ? (st.error ? 'Revisar en Neo' : 'Guardada') : 'Guardar sección')) + '</button>';
   }
   return h + '</div></article>';
 }
 function bannerHtml() {
   const N = S.nota, t = N.turn;
   if (N.busy === 'ia') return '<div class="banner" role="status"><p class="qlab">La IA</p><p class="q wait">' + spin() + '<span>La IA está pensando…</span></p></div>';
-  if (N.err) return '<div class="banner"><div class="msg err" role="alert">' + ic('alert') + '<span>' + esc(N.err) + '</span></div><div class="quick"><button class="btn" data-act="retry"' + (N.edit ? ' disabled' : '') + '>' + ic('refresh') + 'Reintentar</button></div>' + (N.edit ? '<p class="hint">Termina de editar la tarjeta («Listo» o «Cancelar») y luego toca Reintentar.</p>' : '') + '</div>';
+  if (N.err) return '<div class="banner"><div class="msg err" role="alert">' + ic('alert') + '<span>' + esc(N.err) + '</span></div><div class="quick"><button class="btn" data-act="retry"' + (N.edit || N.saveAll ? ' disabled' : '') + '>' + ic('refresh') + 'Reintentar</button></div>' + (N.edit ? '<p class="hint">Termina de editar la tarjeta («Listo» o «Cancelar») y luego toca Reintentar.</p>' : '') + '</div>';
   if (N.edit) return '<div class="banner"><p class="qlab">Editando</p><p class="q">Termina de editar la tarjeta: toca «Listo» o «Cancelar».</p></div>';
   const q = N.localQ || (t && t.question);
   if (q) {
-    const quick = N.localQ ? '' : (q.quick_replies_es || []).map((r, i) => '<button class="btn" data-act="quick" data-i="' + i + '"' + (N.edit ? ' disabled' : '') + '>' + esc(r) + '</button>').join('');
+    // Con una tarjeta marcada, las respuestas rápidas de una pregunta sobre otra parte no se ofrecen: irían a la tarjeta marcada
+    const other = !!(N.pin && q.section && q.section !== N.pin);
+    const quick = N.localQ || other ? (other ? '<p class="hint pinq">Marcaste ' + esc(SEC_TITLE[N.pin]) + ': lo que digas va ahí. Para contestar esta pregunta, toca «Quitar» en esa tarjeta.</p>' : '') : (q.quick_replies_es || []).map((r, i) => '<button class="btn" data-act="quick" data-i="' + i + '"' + (N.edit ? ' disabled' : '') + '>' + esc(r) + '</button>').join('');
     return '<div class="banner"><p class="qlab">' + (N.localQ ? 'Sugerencia' : 'La IA pregunta') + '</p><p class="q" id="qText">' + esc(q.text_es) + '</p><div class="quick">' + quick +
       (N.localQ ? '<button class="btn skip" data-act="dropSugg">Quitar</button>' : '<button class="btn skip" data-act="skip"' + (N.edit ? ' disabled' : '') + '>Saltar</button>') + '</div></div>';
   }
@@ -1147,7 +1221,7 @@ function bannerHtml() {
   return '<div class="banner"><p class="qlab">La IA</p><p class="q">Habla o escribe lo que quieras agregar.</p></div>';
 }
 function finishBtn(N) {
-  const lock = N.finishing || aiBusy() || !!N.edit;
+  const lock = N.finishing || aiBusy() || !!N.edit || !!N.saveAll;
   return '<button class="btn primary block" data-act="askFinish"' + (lock ? ' disabled' : '') + '>' + (N.finishing ? spin() + 'Terminando la nota…' : aiBusy() ? spin() + 'La IA está pensando…' : 'Terminar nota') + '</button>';
 }
 function vNota() {
@@ -1156,12 +1230,13 @@ function vNota() {
   if (N.loading) return { top, main: '<div class="wait" role="status">' + spin('big') + '<span>Abriendo la nota…</span></div>' };
   if (N.err && !N.loaded) return { top, main: '<div class="msg err" role="alert">' + ic('alert') + '<span>' + esc(N.err) + '</span></div><button class="btn ghost block" data-act="reloadNota">Intentar otra vez</button>' };
   const closed = noteClosed();
+  pinCheck(N);                    // se guardó o se terminó la nota: la marca se quita sola
   let m = closed ? '<div class="banner done"><p class="qlab">Nota terminada</p><p class="q">Ya no se puede cambiar desde aquí. Si falta algo, corrígelo en Neo.</p></div>' : bannerHtml();
   if (!closed && noteMode() === 'simple') m += '<div class="msg warn">' + ic('note') + '<span>Esta nota ya tiene texto sin SOAP. La IA escribirá cada parte como un párrafo nuevo.</span></div>';
   m += sections().map(card).join('');
   if (closed) return { top, main: m, bar: '<button class="btn primary block" data-act="revisar">Ver el resumen</button>' };
-  m += '<div class="card flat center">' + finishBtn(N) +
-    (N.finishErr ? '<div class="msg err" role="alert">' + ic('alert') + '<span>' + esc(N.finishErr) + '</span></div>' : '') + '<p class="hint">' + (N.edit ? 'Primero toca «Listo» o «Cancelar» en la tarjeta que estás editando.' : 'Primero guarda cada sección. Al terminar se agrega lo que el cliente declinó.') + '</p></div>';
+  m += '<div class="card flat center finish">' + saveAllBtn(N) + finishBtn(N) +
+    (N.finishErr ? '<div class="msg err" role="alert">' + ic('alert') + '<span>' + esc(N.finishErr) + '</span></div>' : '') + '<p class="hint">' + (N.edit ? MSG_EDITANDO : 'Primero guarda cada sección (o toca «Guardar todo en Neo»). Al terminar se agrega lo que el cliente declinó.') + '</p></div>';
   // dock del micrófono
   const ms = S.mic.state, busy = N.busy === 'ia';
   const showBox = N.typing || !!N.text;
@@ -1169,9 +1244,10 @@ function vNota() {
   const editing = !!N.edit;
   if (showBox) dock += '<div class="answer"><textarea class="input" id="ans" data-bind="nota.text" placeholder="Escribe o habla tu respuesta en español" aria-label="Tu respuesta en español">' + esc(N.text) + '</textarea>' +
     '<div class="row"><button class="btn primary" id="sendBtn" data-act="send"' + ((busy || editing || !String(N.text).trim()) ? ' disabled' : '') + '>' + ic('send') + 'Enviar a la IA</button><button class="btn ghost" data-act="clearText">Borrar</button></div></div>';
-  const stText = ms === 'escuchando' ? 'Escuchando… toca el micrófono para terminar' : ms === 'transcribiendo' ? 'Transcribiendo…' : ms === 'cargando' ? 'Preparando la voz…' : busy ? 'La IA está pensando…' : editing ? 'Toca «Listo» o «Cancelar» en la tarjeta para volver a hablar.' : (!micOk() ? 'Falta el modelo de voz. Puedes escribir.' : (showBox ? '' : 'Toca el micrófono y habla'));
+  const pinTx = N.pin ? 'Todo lo que digas va a ' + SEC_TITLE[N.pin] : '';
+  const stText = ms === 'escuchando' ? 'Escuchando… toca el micrófono para terminar' : ms === 'transcribiendo' ? 'Transcribiendo…' : ms === 'cargando' ? 'Preparando la voz…' : busy ? 'La IA está pensando…' : editing ? 'Toca «Listo» o «Cancelar» en la tarjeta para volver a hablar.' : (!micOk() ? 'Falta el modelo de voz. Puedes escribir.' : (pinTx || (showBox ? '' : 'Toca el micrófono y habla')));
   if (S.mic.err && ms === 'idle' && !busy) dock += '<div class="msg warn" role="alert">' + ic('alert') + '<span>' + esc(S.mic.err) + '</span></div>';
-  if (stText) dock += '<div class="status' + (ms === 'escuchando' ? ' live' : '') + '" role="status">' + (ms === 'transcribiendo' || ms === 'cargando' || busy ? spin() : '') + '<span>' + esc(stText) + '</span>' + (ms === 'escuchando' ? '<button class="btn link" data-act="micCancel">Cancelar</button>' : '') +
+  if (stText) dock += '<div class="status' + (ms === 'escuchando' ? ' live' : stText === pinTx ? ' pinned' : '') + '" role="status">' + (stText === pinTx ? ic('pin') : '') + (ms === 'transcribiendo' || ms === 'cargando' || busy ? spin() : '') + '<span>' + esc(stText) + '</span>' + (ms === 'escuchando' ? '<button class="btn link" data-act="micCancel">Cancelar</button>' : '') +
     (!micOk() && ms === 'idle' && !busy && !editing ? '<button class="btn link" data-act="ajustes">Ir a Ajustes</button>' : '') + '</div>';
   const nSug = ((N.turn && N.turn.suggestions) || []).length;
   dock += '<div class="ctl"><button class="btn ghost" data-act="toggleType" aria-pressed="' + !!N.typing + '">' + ic('kbd') + 'Escribir</button>' +
@@ -1193,10 +1269,12 @@ function vRevisar() {
     const tg = tagOf(st.status);
     const es = (d.text_es || {})[sec];
     const en = sec === 'O' ? oText() : sec === 'Vitales' ? VITALS.filter((v) => (d.vitals || {})[v[0]] != null).map((v) => v[1] + ': ' + (((N.c || {}).vitals || {})[v[0]] == null ? '—' : N.c.vitals[v[0]]) + ' → ' + d.vitals[v[0]] + ' ' + v[2]) : enLines(sec);
-    return '<div class="card rv"><div class="nhead"><h3>' + esc(SEC_TITLE[sec]) + '</h3>' + (st.status ? '<span class="tag ' + tg[1] + '">' + esc(tg[0]) + '</span>' : '<span class="tag">Sin guardar</span>') + '</div>' +
+    return '<div class="card rv" id="rv-' + sec + '"><div class="nhead"><h3>' + esc(SEC_TITLE[sec]) + '</h3>' + (st.status ? '<span class="tag ' + tg[1] + '">' + esc(tg[0]) + '</span>' : '<span class="tag">Sin guardar</span>') + '</div>' +
       '<div class="cols"><div><p class="lab">Lo que dijiste</p><p>' + (es ? esc(es) : '<span class="muted">Nada todavía.</span>') + '</p></div><div><p class="lab">Lo que se escribe (inglés)</p>' +
       (en.length ? '<ul lang="en">' + en.map((l) => '<li>' + esc(l) + '</li>').join('') + '</ul>' : '<p class="muted">Nada todavía.</p>') + '</div></div>' +
-      (st.doubt ? '<div class="msg warn">' + ic('alert') + '<span>' + esc(st.doubt) + '</span></div>' : '') + (st.error ? '<div class="msg err">' + ic('alert') + '<span>' + esc(st.detail || 'No se pudo guardar.') + '</span></div>' : '') + '</div>';
+      (st.doubt ? '<div class="msg warn">' + ic('alert') + '<span>' + esc(st.doubt) + '</span></div>' : '') + (st.error ? '<div class="msg err">' + ic('alert') + '<span>' + esc(st.detail || 'No se pudo guardar.') + '</span></div>' : '') +
+      (N.saveErr[sec] ? '<div class="msg err" role="alert">' + ic('alert') + '<span>' + esc(N.saveErr[sec]) + '</span></div>' : '') +
+      (N.warn[sec] ? '<div class="msg warn" role="alert">' + ic('alert') + '<span>' + esc(N.warn[sec]) + '</span></div>' : '') + '</div>';
   }).join('');
   const doubts = (t.doubts || []).concat((t.missing || []).map((x) => x.text_es));
   if (doubts.length) m += '<div class="card amber"><h3>Dudas</h3><ul>' + doubts.map((x) => '<li>' + esc(x) + '</li>').join('') + '</ul></div>';
@@ -1206,7 +1284,7 @@ function vRevisar() {
   if (q.length) m += '<div class="card flat"><h3>Lo que va para Neo</h3>' + colaItemsHtml(q) + '</div>';
   const fin = N.finished || d.terminada;
   const bar = fin ? '<button class="btn primary block" data-act="home">Volver a las consultas</button>'
-    : finishBtn(N) + (N.edit ? '<p class="note">Primero toca «Listo» o «Cancelar» en la tarjeta que estás editando.</p>' : '');
+    : saveAllBtn(N) + finishBtn(N) + (N.edit ? '<p class="note">' + MSG_EDITANDO + '</p>' : '');
   return { top, main: m, bar };
 }
 
@@ -1263,18 +1341,56 @@ function render() {
   bar.innerHTML = v.bar || '';
   bar.hidden = !v.bar;
   bar.className = 'bar' + (v.barClass ? ' ' + v.barClass : '');
-  main.scrollTop = S.scrollTop ? 0 : top;
+  const want = S.scrollTop ? 0 : top;
+  if (main.scrollTop !== want) main.scrollTo({ top: want, behavior: 'instant' });       // sin animación: la pantalla no «salta» al redibujar
   S.scrollTop = false;
   if (S.scrollTo) { const el = document.getElementById(S.scrollTo); if (el) { S.scrollTo = null; const bn = main.querySelector('.banner'); main.scrollTo({ top: main.scrollTop + el.getBoundingClientRect().top - (bn ? bn.getBoundingClientRect().bottom : main.getBoundingClientRect().top) - 8, behavior: 'instant' }); } }
   if (S.sheet !== sheetSeen) { sheetSeen = S.sheet; sheetAt = Date.now(); }      // una hoja nueva (o cambiada por otra) empieza a contar sus instantes sin toques
   wrap.innerHTML = sheetHtml();
   wrap.hidden = !S.sheet;
   if (S.sheet) { const f = wrap.querySelector('button'); if (f && !wrap.contains(document.activeElement)) f.focus(); }
-  else if (fid) { const el = document.getElementById(fid); if (el) { el.focus(); try { el.setSelectionRange(sel[0], sel[1]); } catch (e) { /* tipo sin selección */ } } }
-  else if (keyAttr && bindAttr) { const el = document.querySelector('[data-bind="' + bindAttr + '"][data-key="' + keyAttr + '"]'); if (el) el.focus(); }
+  else if (fid) { const el = document.getElementById(fid); if (el) { el.focus({ preventScroll: true }); try { el.setSelectionRange(sel[0], sel[1]); } catch (e) { /* tipo sin selección */ } keepFocusedVisible(); } }
+  else if (keyAttr && bindAttr) { const el = document.querySelector('[data-bind="' + bindAttr + '"][data-key="' + keyAttr + '"]'); if (el) { el.focus({ preventScroll: true }); keepFocusedVisible(); } }
   if (S.nota && S.nota.changed && S.nota.changed.length) { const N = S.nota; setTimeout(() => { N.changed = []; }, 0); }   // el destello de «cambió» corre una sola vez
   if (S.screen === 'nota') { const b = $('#micBtn'); if (b && S.mic.state !== 'escuchando') b.style.setProperty('--lvl', '0'); }
+  document.body.classList.toggle('mic-live', S.mic.state === 'escuchando' || S.mic.state === 'transcribiendo');      // grabando: parar y cancelar siempre a la vista
+  updateKb();                     // si el campo con el cursor ya no está, el micrófono vuelve
 }
+
+// ---------------------------------------------------------------- teclado: lo que se escribe nunca queda tapado
+const isField = (el) => !!el && (el.tagName === 'TEXTAREA' || (el.tagName === 'INPUT' && !/^(checkbox|radio|button|submit|hidden)$/i.test(el.type || '')));
+const vpH = () => (window.visualViewport ? window.visualViewport.height : window.innerHeight);
+let vpMax = vpH(), vpW = window.innerWidth, kbT = null;
+// Con el teclado abierto (la pantalla quedó bastante más baja y hay un campo con el cursor) la pregunta deja de estar fija y el micrófono se esconde un rato.
+function updateKb() {
+  if (window.innerWidth !== vpW) { vpW = window.innerWidth; vpMax = 0; }      // giró el teléfono: se mide de nuevo
+  const h = vpH();
+  vpMax = Math.max(vpMax, h);                                                 // la altura más grande vista = sin teclado
+  const on = isField(document.activeElement) && h < 0.75 * vpMax;
+  if (document.body.classList.contains('kb') !== on) { document.body.classList.toggle('kb', on); return true; }
+  return false;
+}
+// Mueve la lista lo justo para que el campo con el cursor se vea entero (debajo de la pregunta fija y arriba del teclado). Si ya se ve, no toca nada.
+function keepFocusedVisible() {
+  const el = document.activeElement;
+  if (!isField(el) || !el.isConnected) return;
+  const main = $('#main');
+  if (!main.contains(el)) { el.scrollIntoView({ block: 'nearest', behavior: 'instant' }); return; }
+  const mr = main.getBoundingClientRect(), r = el.getBoundingClientRect();
+  let top = mr.top + 8;
+  const bn = main.querySelector('.banner');
+  if (bn && getComputedStyle(bn).position === 'sticky') top = Math.max(top, bn.getBoundingClientRect().bottom + 8);
+  const bottom = Math.min(mr.bottom, vpH()) - 8;
+  let d = 0;
+  if (r.bottom > bottom) d = r.bottom - bottom;
+  if (r.top - d < top) d = r.top - top;                                       // si no cabe entero, se ve el principio
+  if (Math.abs(d) >= 1) main.scrollTo({ top: main.scrollTop + d, behavior: 'instant' });
+}
+function kbSoon(ms) { clearTimeout(kbT); kbT = setTimeout(() => { kbT = null; updateKb(); keepFocusedVisible(); }, ms); }
+document.addEventListener('focusin', (e) => { if (!isField(e.target)) return; updateKb(); keepFocusedVisible(); kbSoon(250); });     // el teclado tarda en salir
+document.addEventListener('focusout', () => { setTimeout(() => { if (updateKb()) keepFocusedVisible(); }, 0); });      // al redibujar se pierde y vuelve el foco: se decide después
+window.addEventListener('resize', () => kbSoon(250));
+if (window.visualViewport) window.visualViewport.addEventListener('resize', () => kbSoon(250));
 
 // ---------------------------------------------------------------- eventos de toque
 function setPath(path, value) {
@@ -1294,23 +1410,24 @@ const ACTIONS = {
   doPlantillaOk() { const id = S.sheet && S.sheet.arg; if (id) doPlantilla(id); }, askPlantillaList() { S.sheet = { type: 'plantillas' }; render(); },
   goSave() { const f = S.sheet && S.sheet.first; closeSheet(); S.scrollTo = f ? 'card-' + f : null; if (S.screen === 'revisar') back(); else render(); },
   today: goToday, rescanHoy,
-  target(d) { setTarget(d.sec); },
+  target(d, t, e) { const x = e && e.target && e.target.closest && e.target.closest('label, .edit-o, .vedit, textarea, input, select, button'); if (x && t.contains(x)) return; setTarget(d.sec); },   // un toque dentro de un campo o de un editor no marca la tarjeta
   quick(d) { if (aiBusy() || S.nota.edit) return; const q = S.nota.turn && S.nota.turn.question; if (q) sendAnswer((q.quick_replies_es || [])[Number(d.i)] || ''); },
   skip: skipQuestion, retry: retryJob, reloadNota: loadNota,
   edit(d) { startEdit(d.sec); }, editOk: saveEdit, editCancel() { if (S.nota.edit && S.nota.edit.busy) return; S.nota.edit = null; render(); },
   oState(d) { const e = S.nota.edit; const cur = e.rows[d.row] || { state: '', note: '' }; e.rows[d.row] = { state: cur.state === d.state ? '' : d.state, note: cur.note }; render(); },
-  save(d) { saveSection(d.sec); }, askFinish, doFinish, revisar() { if (S.nota) go('revisar'); }, home() { stashNota(); S.nota = null; S.cons = null; goHoy(); },
+  save(d) { saveSection(d.sec); }, askFinish, doFinish, saveAll, saveAllFirst() { closeSheet(); saveAll(); },
+  unpin() { const N = S.nota; if (N && N.pin) { unpin(N); render(); } }, revisar() { if (S.nota) go('revisar'); }, home() { stashNota(); S.nota = null; S.cons = null; goHoy(); },
   mic: micTap, micCancel, toggleType() { const N = S.nota; N.typing = !N.typing; render(); if (N.typing) { const a = $('#ans'); if (a) a.focus(); } },
   send() { const N = S.nota; const t = N.text; if (String(t).trim()) sendAnswer(t, { fromBox: true }); }, clearText() { S.nota.text = ''; S.nota.typing = false; render(); },
   sugs() { S.sheet = { type: 'sugs' }; render(); },
   sugg(d) {
     const N = S.nota, s = ((N.turn && N.turn.suggestions) || [])[Number(d.i)];
     S.sheet = null;
-    if (s) { N.localQ = { text_es: s.text_es, section: s.section, about: 'sugerencia:' + s.kind }; N.target = s.section || null; }
+    if (s) { N.localQ = { text_es: s.text_es, section: s.section, about: 'sugerencia:' + s.kind }; N.pin = null; N.target = s.section || null; }      // eligió otro tema: se quita la marca
     render();
     const q = $('#qText'); if (q) q.scrollIntoView({ block: 'nearest' });
   },
-  dropSugg() { const N = S.nota; N.localQ = null; N.target = (N.turn && N.turn.question && N.turn.question.section) || null; render(); },
+  dropSugg() { const N = S.nota; N.localQ = null; N.target = N.pin || (N.turn && N.turn.question && N.turn.question.section) || null; render(); },
   cambiarClave() { S.cp = { old: '', nw: '', rep: '', show: false, err: '', busy: false, forced: false }; go('clave'); },
   import: doImport, askLogout, doLogout, askForget, doForget,
 };
@@ -1321,7 +1438,7 @@ document.addEventListener('click', (e) => {
   if (S.sheet && !t.closest('#sheetWrap') && t.dataset.act !== 'closeSheet') return;
   if (sheetFresh()) return;
   const f = ACTIONS[t.dataset.act];
-  if (f) f(t.dataset, t);
+  if (f) f(t.dataset, t, e);
 });
 document.addEventListener('click', (e) => { if (e.target.id === 'sheetWrap' && !sheetFresh()) { S.sheet = null; render(); } });
 document.addEventListener('input', (e) => {
@@ -1331,6 +1448,7 @@ document.addEventListener('input', (e) => {
   if (b === 'vit') { S.nota.edit.vit[el.dataset.key] = el.value; return; }
   if (b === 'oRest') { S.nota.edit.rest = el.checked; return; }
   if (b === 'edit.text') { S.nota.edit.text = el.value; return; }
+  if (b === 'edit.tests') { S.nota.edit.tests = el.value; return; }
   setPath(b, el.value);
   if (b === 'login.user' || b === 'login.pass') { const x = $('#loginBtn'); if (x) x.disabled = !(S.login.user.trim() && S.login.pass) || !!S.login.busy; }
   else if (/^cp\./.test(b)) { const x = $('#cpBtn'); if (x) x.disabled = !cpOk(); const l = $('#cpChecks'); if (l) l.innerHTML = policy(S.cp.nw, S.user && S.user.user, S.cp.old, S.cp.rep).map(checkLi).join(''); }
