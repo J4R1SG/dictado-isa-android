@@ -580,9 +580,11 @@ async function refreshNota(tries) {
       api('GET', '/api/v1/borrador?date=' + dayKey(S.day) + '&id=' + encodeURIComponent(N.cid)),
     ]);
     if (S.nota !== N) return;
-    const changed = JSON.stringify([N.c, N.draft]) !== JSON.stringify([cr.c, br.draft || N.draft]);
+    const pv = N.pvFresh && N.turn && br.preview && typeof br.preview === 'object' ? br.preview : null;      // el texto fresco solo cambia si el que se ve es fresco
+    const changed = JSON.stringify([N.c, N.draft]) !== JSON.stringify([cr.c, br.draft || N.draft]) || (pv && JSON.stringify(pv) !== JSON.stringify(N.turn.preview || null));
     N.c = cr.c;
     if (br.draft) { N.draft = br.draft; if (N.turn) N.turn.draft = br.draft; }
+    if (pv) N.turn.preview = pv;
     if (br.draft && br.draft.terminada && N.finishing) { N.finished = true; N.finishing = false; }
     if (changed) render();
   } catch (e) {
@@ -751,14 +753,27 @@ function filled(sec) {
   return Array.isArray(v) ? v.length > 0 : !!(v && String(v).trim());
 }
 // Lo cobrado (no declinado) se pone solo en P, como en el record de la PC: la PC lo manda en draft.plan_auto (ya sin lo que la doctora dijo) hasta que P se guarda.
-const autoP = (d) => ((d.saved || []).indexOf('P') >= 0 || !Array.isArray(d.plan_auto)) ? [] : d.plan_auto.map((x) => String(x || '').trim()).filter(Boolean);
+// Ya guardada (o con la nota terminada) manda lo que de verdad se puso en draft.plan_auto_sent. Home igual si la PC manda home_auto / home_auto_sent.
+const AUTO = { P: 'plan_auto', Home: 'home_auto' };
+const cleanL = (v) => Array.isArray(v) ? v.map((x) => String(x || '').trim()).filter(Boolean) : [];
+const autoOpen = (d, sec) => (!AUTO[sec] || (d.saved || []).indexOf(sec) >= 0 || d.terminada) ? [] : cleanL(d[AUTO[sec]]);     // lo que todavía se va a poner
+const autoP = (d) => autoOpen(d, 'P');
+function autoShown(sec) {                   // lo que se ve en la tarjeta y en Revisar
+  const d = (S.nota && S.nota.draft) || {};
+  if (!AUTO[sec]) return [];
+  if (!secState(sec).locked) return autoOpen(d, sec);
+  const s = d[AUTO[sec] + '_sent'];
+  return Array.isArray(s) ? cleanL(s) : cleanL(d[AUTO[sec]]);       // una PC vieja sin «_sent»: lo que haya
+}
+// Con lo suyo: P y Home cuentan solo con lo que dijo la doctora (lo cobrado se pone con su «Guardar sección» o al terminar).
+const ownFilled = (d, s) => AUTO[s] ? (d[SECTION_KEY[s]] || []).length > 0 : filled(s);
 function enLines(sec) {
   const N = S.nota, d = N.draft || {};
   const pv = N.pvFresh && N.turn && N.turn.preview && N.turn.preview[sec];
   let t = typeof pv === 'string' ? pv : '';
   if (!t) { const v = sec === 'Notas' ? testsText(d) : d[SECTION_KEY[sec]]; t = Array.isArray(v) ? v.join('\n') : (v || ''); }
   const l = String(t).split('\n').map((x) => x.trim()).filter(Boolean);
-  if (sec === 'P') autoP(d).forEach((x) => { if (l.indexOf(x) < 0) l.push(x); });     // el texto fresco de la IA ya las trae: no se repiten
+  autoShown(sec).forEach((x) => { if (l.indexOf(x) < 0) l.push(x); });     // el texto fresco de la IA ya las trae: no se repiten
   return l;
 }
 function oText() {
@@ -804,7 +819,10 @@ async function saveEdit() {
   e.busy = true; e.err = ''; render();
   try {
     const r = await api('POST', '/api/v1/editar', { date: dayKey(S.day), id: N.cid, edits: { [e.sec]: val } });
-    if (r.draft) { N.draft = r.draft; if (N.turn) { N.turn.draft = r.draft; if (N.turn.preview) delete N.turn.preview[e.sec]; } }
+    if (r.draft) {
+      N.draft = r.draft;
+      if (N.turn) { N.turn.draft = r.draft; if (r.preview && typeof r.preview === 'object') N.turn.preview = r.preview; else if (N.turn.preview) delete N.turn.preview[e.sec]; }     // la PC manda el texto ya hecho con lo editado
+    }
     N.edit = null; N.dirty = true;
   } catch (x) { if (x.handled) return; e.busy = false; e.err = errText(x); }
   render();
@@ -837,7 +855,8 @@ async function saveSection(sec) {           // devuelve true si la PC la recibi�
   return ok;
 }
 // «Guardar todo en Neo»: las secciones con texto que faltan, una tras otra, con el mismo «Guardar sección» de cada tarjeta.
-const saveAllList = (N) => sections().filter((s) => filled(s) && !secState(s).locked && !secState(s).pending && !N.saving[s]);
+// P con solo lo cobrado no se manda (se cerraría y lo que se dicte después se perdería): eso se pone con su botón o al terminar.
+const saveAllList = (N) => sections().filter((s) => ownFilled(N.draft || {}, s) && !secState(s).locked && !secState(s).pending && !N.saving[s]);
 const canSaveAll = (N) => !N.saveAll && !N.finishing && !aiBusy() && !N.edit && !noteClosed() && saveAllList(N).length > 0;
 async function saveAll() {
   const N = S.nota;
@@ -876,8 +895,8 @@ function askFinish() {
   const N = S.nota;
   if (!N || aiBusy() || N.edit || N.finishing || N.saveAll) return;
   const wait = sections().filter((s) => filled(s) && (secState(s).pending || N.saving[s]));          // ya mandadas: se están guardando
-  const d = N.draft || {}, own = (s) => s === 'P' ? (d.plan_items || []).length > 0 : filled(s);      // P solo con lo cobrado no se pierde: se pone al terminar
-  const open = sections().filter((s) => own(s) && !secState(s).locked && wait.indexOf(s) < 0);
+  const d = N.draft || {};                                                                             // P solo con lo cobrado no se pierde: se pone al terminar
+  const open = sections().filter((s) => ownFilled(d, s) && !secState(s).locked && wait.indexOf(s) < 0);
   let t = open.length
     ? 'Estas secciones tienen texto pero no las has guardado en Neo: ' + open.map((s) => SEC_SHORT[s]).join(', ') + '. Si terminas ahora, se perderán.'
     : 'Se guardará lo que falta' + (autoP(d).length && !secState('P').locked ? ', lo que se cobró se pone en el Plan' : '') + ' y se agregará lo que el cliente declinó. Después ya no se puede cambiar desde aquí.';
@@ -1192,7 +1211,7 @@ function card(sec) {
   if (isP) h += '<div class="pinline">' + ic('pin') + '<span>Marcada: todo lo que digas va solo aquí</span><button class="btn ghost small" data-act="unpin" aria-label="Quitar la marca de ' + esc(SEC_SHORT[sec]) + '">Quitar</button></div>';
   else if (isT && !st.locked) h += '<p class="here">' + ic('mic') + 'Aquí va lo que digas</p>';
   h += bodyCard(sec);
-  if (sec === 'P' && autoP(d).length) h += '<p class="hint auto">' + ic('cart') + '<span>Lo que se cobró se pone solo en el Plan. No hace falta decirlo.</span></p>';
+  if (AUTO[sec] && !st.locked && autoOpen(d, sec).length) h += '<p class="hint auto">' + ic('cart') + '<span>' + (sec === 'P' ? 'Lo que se cobró se pone solo en el Plan.' : 'Lo que se cobró para la casa se pone solo aquí.') + ' No hace falta decirlo.</span></p>';
   if (es && !ed) h += '<p class="es">Lo que dijiste: «' + esc(es) + '»</p>';
   if (st.done) h += '<div class="msg ok">' + ic('lock') + '<span><b>Guardada en Neo.</b> Ya no se puede cambiar desde aquí.</span></div>';
   if (st.doubt) h += '<div class="msg warn" role="alert">' + ic('alert') + '<span>' + esc(st.doubt) + '</span></div>';
