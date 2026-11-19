@@ -30,6 +30,7 @@ const ICONS = {
   grid: '<rect x="4" y="4" width="7" height="7" rx="1"/><rect x="13" y="4" width="7" height="7" rx="1"/><rect x="4" y="13" width="7" height="7" rx="1"/><rect x="13" y="13" width="7" height="7" rx="1"/>',
   clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>', heart: '<path d="M12 20s-8-5-8-11a4.5 4.5 0 018-2.7A4.5 4.5 0 0120 9c0 6-8 11-8 11z"/>',
   note: '<path d="M6 3h9l4 4v14H6zM14 3v5h5M9 13h7M9 17h7"/>', send: '<path d="M4 12l16-8-6 16-3-7-7-1z"/>', doc: '<path d="M6 3h9l4 4v14H6zM14 3v5h5"/>',
+  chat: '<path d="M4 5h16v11H10l-5 4v-4H4z"/>', up: '<path d="M6 15l6-6 6 6"/>',
   user: '<circle cx="12" cy="8" r="4"/><path d="M4 21c1-4 4-6 8-6s7 2 8 6"/>', pin: '<path d="M12 16v6M8 3h8l-1 6 4 4v3H5v-3l4-4-1-6z"/>', wifi: '<path d="M2 9a15 15 0 0120 0M5 13a10 10 0 0114 0M8.5 16.5a5 5 0 017 0M12 20h.01"/>',
 };
 const ic = (n) => '<svg viewBox="0 0 24 24" aria-hidden="true">' + (ICONS[n] || '') + '</svg>';
@@ -221,13 +222,14 @@ window.addEventListener('popstate', (e) => {
 });
 function enter(screen, fromPop) {
   const prev = S.screen;
+  if (prev === 'nota' && S.nota) { const m = $('#main'); S.nota.scrollY = m ? m.scrollTop : 0; }
   S.screen = screen;
   if (prev === 'nota' && screen !== 'nota' && screen !== 'revisar') { micCancelQuiet(); clearT('job'); }
   if (screen !== 'hoy') clearT('hoy');
   if (screen !== 'nota' && screen !== 'revisar') S.scrollTo = null;
   if (prev === 'nota' && screen !== 'nota') S.mic.err = '';
   if (!/^(consulta|nota|revisar)$/.test(screen)) { clearT('cola'); }
-  S.scrollTop = true;
+  S.scrollTop = (screen === 'nota' && fromPop && S.nota && S.nota.loaded && S.nota.scrollY != null) ? S.nota.scrollY : true;
   if (screen === 'hoy') { S.hoyI = navI(); rollDay(); loadHoy(false); }
   else if (screen === 'consulta') { if (!S.cons) { S.screen = 'hoy'; loadHoy(false); return; } loadCons(); }
   else if (screen === 'nota') {
@@ -520,13 +522,13 @@ function addLocalCola(qid, section, extra) {
 }
 
 // ---------------------------------------------------------------- nota con IA
-const SEC_TITLE = { S: 'S · Lo que cuenta el dueño', O: 'O · Examen', A: 'A · Diagnóstico', P: 'P · Plan', Home: 'Home · Para la casa', Recheck: 'Recheck · Revisión', Vitales: 'Vitales', Anestesia: 'Anestesia' };
-const SEC_SHORT = { S: 'S', O: 'O', A: 'A', P: 'P', Home: 'Home', Recheck: 'Recheck', Vitales: 'Vitales', Anestesia: 'Anestesia' };
-const MODE_SECTIONS = { soap: ['S', 'O', 'A', 'P', 'Home', 'Recheck', 'Vitales'], simple: ['O', 'A', 'P', 'Home', 'Recheck', 'Vitales'], cirugia: ['Anestesia', 'Home', 'Recheck', 'Vitales'] };
+const SEC_TITLE = { S: 'S · Lo que cuenta el dueño', O: 'O · Examen', Notas: 'Doctor\'s Notes · Notas del doctor', A: 'A · Diagnóstico', P: 'P · Plan', Home: 'Home · Para la casa', Recheck: 'Recheck · Revisión', Vitales: 'Vitales', Anestesia: 'Anestesia' };
+const SEC_SHORT = { S: 'S', O: 'O', Notas: 'Notas', A: 'A', P: 'P', Home: 'Home', Recheck: 'Recheck', Vitales: 'Vitales', Anestesia: 'Anestesia' };
+const MODE_SECTIONS = { soap: ['S', 'O', 'Notas', 'A', 'P', 'Home', 'Recheck', 'Vitales'], simple: ['O', 'Notas', 'A', 'P', 'Home', 'Recheck', 'Vitales'], cirugia: ['Anestesia', 'Home', 'Recheck', 'Vitales'] };
 const O_ROWS = ['Attitude', 'BCS', 'Eyes', 'Ears', 'Nose and Throat', 'Mouth / Teeth / Gums', 'Heart', 'Respiratory', 'GI Tract / Abdomen', 'Urinary and Genitals', 'Lymph Nodes', 'Legs / Paws / Back', 'Coat and Skin', 'Neurology'];
 const O_STATES = ['WNL', 'Abnormal', 'DNE'];
 const VITALS = [['weight_lb', 'Peso', 'lb'], ['temperature_f', 'Temperatura', '°F'], ['pulse_bpm', 'Pulso', 'lpm'], ['respiration_bpm', 'Respiración', 'rpm']];
-const SECTION_KEY = { S: 'subjective', A: 'assessment', P: 'plan_items', Anestesia: 'plan_items', Home: 'home_items', Recheck: 'recheck' };
+const SECTION_KEY = { S: 'subjective', Notas: 'objective_tests', A: 'assessment', P: 'plan_items', Anestesia: 'plan_items', Home: 'home_items', Recheck: 'recheck' };
 const LIST_SEC = { A: 1, P: 1, Anestesia: 1, Home: 1 };
 
 function newNota(id) {
@@ -608,8 +610,7 @@ function applyTurn(turn, resume) {
   pinCheck(N);
   N.target = N.pin || (turn.question && turn.question.section) || null;          // con una tarjeta marcada, la pregunta de la IA no cambia el destino
   N.changed = Array.isArray(turn.changed) ? turn.changed : [];
-  render();
-  if (!resume) setTimeout(() => { const m = $('#main'); if (m) m.scrollTo({ top: 0 }); }, 0);
+  render();                       // la lista se queda donde estaba: la pregunta nueva se ve arriba (o en la burbuja)
 }
 const aiBusy = () => !!(S.nota && S.nota.busy === 'ia');
 const snapText = (N) => JSON.stringify((N.draft && N.draft.text_es) || {});
@@ -742,26 +743,31 @@ function secState(sec) {
 }
 function filled(sec) {
   const d = (S.nota && S.nota.draft) || {};
-  if (sec === 'O') return !!((d.objective || []).length || d.objective_rest_normal || testsText(d));
+  if (sec === 'O') return !!((d.objective || []).length || d.objective_rest_normal);
+  if (sec === 'Notas') return !!testsText(d);
   if (sec === 'Vitales') return VITALS.some((v) => (d.vitals || {})[v[0]] != null);
+  if (sec === 'P' && autoP(d).length) return true;           // lo cobrado ya cuenta: P se puede guardar aunque no se haya dicho nada
   const v = d[SECTION_KEY[sec]];
   return Array.isArray(v) ? v.length > 0 : !!(v && String(v).trim());
 }
+// Lo cobrado (no declinado) se pone solo en P, como en el record de la PC: la PC lo manda en draft.plan_auto (ya sin lo que la doctora dijo) hasta que P se guarda.
+const autoP = (d) => ((d.saved || []).indexOf('P') >= 0 || !Array.isArray(d.plan_auto)) ? [] : d.plan_auto.map((x) => String(x || '').trim()).filter(Boolean);
 function enLines(sec) {
   const N = S.nota, d = N.draft || {};
   const pv = N.pvFresh && N.turn && N.turn.preview && N.turn.preview[sec];
   let t = typeof pv === 'string' ? pv : '';
-  if (!t) { const v = d[SECTION_KEY[sec]]; t = Array.isArray(v) ? v.join('\n') : (v || ''); }
-  return String(t).split('\n').map((x) => x.trim()).filter(Boolean);
+  if (!t) { const v = sec === 'Notas' ? testsText(d) : d[SECTION_KEY[sec]]; t = Array.isArray(v) ? v.join('\n') : (v || ''); }
+  const l = String(t).split('\n').map((x) => x.trim()).filter(Boolean);
+  if (sec === 'P') autoP(d).forEach((x) => { if (l.indexOf(x) < 0) l.push(x); });     // el texto fresco de la IA ya las trae: no se repiten
+  return l;
 }
 function oText() {
   const d = (S.nota && S.nota.draft) || {};
   const l = (d.objective || []).map((f) => f.row + ': ' + f.state + (f.note ? ' - ' + f.note : ''));
   if (d.objective_rest_normal) l.push('Lo demás: WNL');
-  if (testsText(d)) l.push("Doctor's Notes: " + testsText(d));
   return l;
 }
-// Notas del doctor (fila «Doctor's Notes» de la O): tests, lo que vio y otras notas (texto en inglés, completo). La PC puede mandarlo como texto o como lista de renglones.
+// Notas del doctor (su propia tarjeta «Notas»; en Neo va en la fila «Doctor's Notes» de la O): tests, lo que vio y otras notas (inglés). La PC puede mandarlo como texto o como lista de renglones.
 const testsText = (d) => { const v = d && (d.objective_tests != null ? d.objective_tests : d.tests); return String(Array.isArray(v) ? v.join('\n') : (v || '')).trim(); };
 
 // --- editar a mano
@@ -770,22 +776,23 @@ function startEdit(sec) {
   if (secState(sec).locked || aiBusy() || N.saving[sec] || secState(sec).pending || N.saveAll) return;
   if (N.edit) { toast(MSG_EDITANDO); return; }
   const e = { sec };
-  if (sec === 'O') { e.rows = {}; (d.objective || []).forEach((f) => { e.rows[f.row] = { state: f.state, note: f.note || '' }; }); e.rest = !!d.objective_rest_normal; e.tests = testsText(d); }
+  if (sec === 'O') { e.rows = {}; (d.objective || []).forEach((f) => { e.rows[f.row] = { state: f.state, note: f.note || '' }; }); e.rest = !!d.objective_rest_normal; }
   else if (sec === 'Vitales') { e.vit = {}; VITALS.forEach((v) => { const x = (d.vitals || {})[v[0]]; e.vit[v[0]] = x == null ? '' : String(x); }); }
+  else if (sec === 'Notas') { e.text = testsText(d); }
   else if (LIST_SEC[sec]) { const v = d[SECTION_KEY[sec]]; e.text = (Array.isArray(v) ? v : []).join('\n'); }
   else { e.text = d[SECTION_KEY[sec]] || ''; }
   N.edit = e; render();
 }
 function editValue(e) {
   if (e.sec === 'O') {
-    return { objective: O_ROWS.filter((r) => e.rows[r] && e.rows[r].state).map((r) => ({ row: r, state: e.rows[r].state, note: (e.rows[r].note || '').trim() })), objective_rest_normal: !!e.rest,
-      objective_tests: String(e.tests || '').split('\n').map((x) => x.trim()).filter(Boolean).join('\n') };
+    return { objective: O_ROWS.filter((r) => e.rows[r] && e.rows[r].state).map((r) => ({ row: r, state: e.rows[r].state, note: (e.rows[r].note || '').trim() })), objective_rest_normal: !!e.rest };
   }
   if (e.sec === 'Vitales') {
     const o = {};
     VITALS.forEach((v) => { const t = String(e.vit[v[0]] || '').trim().replace(',', '.'); o[v[0]] = t === '' ? null : Number(t); });
     return o;
   }
+  if (e.sec === 'Notas') return String(e.text || '').split('\n').map((x) => x.trim()).filter(Boolean).join('\n');     // texto; vacío = borrar
   if (LIST_SEC[e.sec]) return e.text.split('\n').map((x) => x.trim()).filter(Boolean);
   return e.text.trim() || null;
 }
@@ -869,10 +876,11 @@ function askFinish() {
   const N = S.nota;
   if (!N || aiBusy() || N.edit || N.finishing || N.saveAll) return;
   const wait = sections().filter((s) => filled(s) && (secState(s).pending || N.saving[s]));          // ya mandadas: se están guardando
-  const open = sections().filter((s) => filled(s) && !secState(s).locked && wait.indexOf(s) < 0);
+  const d = N.draft || {}, own = (s) => s === 'P' ? (d.plan_items || []).length > 0 : filled(s);      // P solo con lo cobrado no se pierde: se pone al terminar
+  const open = sections().filter((s) => own(s) && !secState(s).locked && wait.indexOf(s) < 0);
   let t = open.length
     ? 'Estas secciones tienen texto pero no las has guardado en Neo: ' + open.map((s) => SEC_SHORT[s]).join(', ') + '. Si terminas ahora, se perderán.'
-    : 'Se guardará lo que falta y se agregará lo que el cliente declinó. Después ya no se puede cambiar desde aquí.';
+    : 'Se guardará lo que falta' + (autoP(d).length && !secState('P').locked ? ', lo que se cobró se pone en el Plan' : '') + ' y se agregará lo que el cliente declinó. Después ya no se puede cambiar desde aquí.';
   if (wait.length) t += ' Estas ya las mandaste y se están guardando: ' + wait.map((s) => SEC_SHORT[s]).join(', ') + '.';
   S.sheet = { type: 'confirm', title: 'Terminar la nota', text: t, ok: open.length ? 'Terminar así' : 'Sí, terminar', act: 'doFinish', cancel: open.length ? 'Guardar todo primero' : 'Todavía no', cancelAct: open.length ? 'saveAllFirst' : '', first: open[0] || '', bad: open.length > 0 };
   render();
@@ -1131,8 +1139,7 @@ function oCard(sec, st) {
       const cur = ed.rows[r] || { state: '', note: '' };
       return '<div class="r"><p class="n">' + esc(r) + '</p><div class="opts">' + O_STATES.map((s) => '<button class="opt ' + s + '" data-act="oState" data-row="' + esc(r) + '" data-state="' + s + '" aria-pressed="' + (cur.state === s) + '">' + s + '</button>').join('') + '</div>' +
         (cur.state === 'Abnormal' ? '<input class="input" data-bind="oNote" data-key="' + esc(r) + '" value="' + esc(cur.note) + '" placeholder="¿Qué se vio?" aria-label="Nota de ' + esc(r) + '">' : '') + '</div>';
-    }).join('') + '<label class="small"><input type="checkbox" data-bind="oRest"' + (ed.rest ? ' checked' : '') + '> Lo demás está normal (WNL)</label>' +
-      '<label class="field otests"><span>' + O_TESTS + '</span><textarea class="input" id="editTests" data-bind="edit.tests" lang="en" placeholder="Resultados de tests, lo que viste y otras notas (inglés)">' + esc(ed.tests || '') + '</textarea></label></div>';
+    }).join('') + '<label class="small"><input type="checkbox" data-bind="oRest"' + (ed.rest ? ' checked' : '') + '> Lo demás está normal (WNL)</label></div>';
   }
   const rows = O_ROWS.map((r) => {
     const neo = (c.o_rows || {})[r] || {};
@@ -1144,11 +1151,8 @@ function oCard(sec, st) {
     else chip = '<span class="chip dim">—</span>';
     return '<div class="r"><span class="n">' + esc(r) + '</span><span>' + chip + '</span>' + (note ? '<span class="note en" lang="en">' + esc(note) + '</span>' : '') + '</div>';
   }).join('');
-  const tt = testsText(d);
-  return '<div class="ogrid">' + rows + '</div>' + (d.objective_rest_normal ? '<p class="hint">«Lo demás normal»: las filas sin nota se escriben como WNL.</p>' : '') +
-    (tt ? '<div class="otests"><p class="lab">' + O_TESTS + '</p><p class="en" lang="en">' + esc(tt) + '</p></div>' : '');
+  return '<div class="ogrid">' + rows + '</div>' + (d.objective_rest_normal ? '<p class="hint">«Lo demás normal»: las filas sin nota se escriben como WNL.</p>' : '');
 }
-const O_TESTS = 'Notas del doctor: tests, lo que viste y otras notas';
 function vitCard() {
   const N = S.nota, d = N.draft || {}, c = N.c || {};
   const ed = N.edit && N.edit.sec === 'Vitales' ? N.edit : null;
@@ -1166,7 +1170,7 @@ function bodyCard(sec) {
   if (sec === 'O') return oCard(sec);
   if (sec === 'Vitales') return vitCard();
   const ed = N.edit && N.edit.sec === sec ? N.edit : null;
-  if (ed) return '<textarea class="input" data-bind="edit.text" id="editTx" lang="en" aria-label="Texto en inglés de ' + esc(SEC_SHORT[sec]) + '">' + esc(ed.text) + '</textarea>' + (LIST_SEC[sec] ? '<p class="hint">Una línea por cada renglón.</p>' : '');
+  if (ed) return '<textarea class="input" data-bind="edit.text" id="editTx" lang="en" aria-label="Texto en inglés de ' + esc(SEC_SHORT[sec]) + '"' + (sec === 'Notas' ? ' placeholder="Resultados de tests, lo que viste y otras notas (inglés)"' : '') + '>' + esc(ed.text) + '</textarea>' + (LIST_SEC[sec] ? '<p class="hint">Una línea por cada renglón.</p>' : '');
   const lines = enLines(sec);
   if (!lines.length) return '<p class="en empty">Todavía no hay nada aquí. Habla o escribe lo que va en esta parte.</p>';
   if (LIST_SEC[sec]) return '<ul class="en" lang="en">' + lines.map((l) => '<li>' + esc(l) + '</li>').join('') + '</ul>';
@@ -1188,6 +1192,7 @@ function card(sec) {
   if (isP) h += '<div class="pinline">' + ic('pin') + '<span>Marcada: todo lo que digas va solo aquí</span><button class="btn ghost small" data-act="unpin" aria-label="Quitar la marca de ' + esc(SEC_SHORT[sec]) + '">Quitar</button></div>';
   else if (isT && !st.locked) h += '<p class="here">' + ic('mic') + 'Aquí va lo que digas</p>';
   h += bodyCard(sec);
+  if (sec === 'P' && autoP(d).length) h += '<p class="hint auto">' + ic('cart') + '<span>Lo que se cobró se pone solo en el Plan. No hace falta decirlo.</span></p>';
   if (es && !ed) h += '<p class="es">Lo que dijiste: «' + esc(es) + '»</p>';
   if (st.done) h += '<div class="msg ok">' + ic('lock') + '<span><b>Guardada en Neo.</b> Ya no se puede cambiar desde aquí.</span></div>';
   if (st.doubt) h += '<div class="msg warn" role="alert">' + ic('alert') + '<span>' + esc(st.doubt) + '</span></div>';
@@ -1204,21 +1209,41 @@ function card(sec) {
   }
   return h + '</div></article>';
 }
+// La pregunta de arriba se puede achicar a una burbuja (S.qMin, sigue así en los turnos nuevos). La burbuja avisa con un punto si llegó una pregunta que no ha visto, con el giro si la IA piensa y con un punto rojo si hubo un error.
+const curQ = (N) => N.localQ || (N.turn && N.turn.question) || null;
+const qKey = (N) => { const q = curQ(N); return q ? String(N.cid) + '|' + (q.about || '') + '|' + (q.text_es || '') : ''; };
+const qHead = (lab) => '<div class="qhead"><p class="qlab">' + lab + '</p><button class="icon-btn qmin" data-act="minQ" aria-label="Ocultar la pregunta (queda como burbuja arriba)">' + ic('up') + '<span>Ocultar</span></button></div>';
+function bubbleHtml() {
+  const N = S.nota, busy = N.busy === 'ia', err = !busy && !!N.err, nueva = !busy && !err && !!qKey(N) && qKey(N) !== N.seenQ;
+  const why = busy ? ': la IA está pensando' : err ? ': hubo un error' : nueva ? ': hay una pregunta nueva' : '';
+  return '<div class="qbub-wrap"><button class="qbub' + (err ? ' err' : nueva ? ' new' : '') + '" id="qBub" data-act="maxQ" aria-expanded="false" aria-label="Abrir la pregunta de la IA' + why + '">' +
+    (busy ? spin() : ic(err ? 'alert' : 'chat')) + '<span>Pregunta de la IA</span>' + (err || nueva ? '<i class="qdot" aria-hidden="true"></i>' : '') + '</button></div>';
+}
 function bannerHtml() {
   const N = S.nota, t = N.turn;
-  if (N.busy === 'ia') return '<div class="banner" role="status"><p class="qlab">La IA</p><p class="q wait">' + spin() + '<span>La IA está pensando…</span></p></div>';
-  if (N.err) return '<div class="banner"><div class="msg err" role="alert">' + ic('alert') + '<span>' + esc(N.err) + '</span></div><div class="quick"><button class="btn" data-act="retry"' + (N.edit || N.saveAll ? ' disabled' : '') + '>' + ic('refresh') + 'Reintentar</button></div>' + (N.edit ? '<p class="hint">Termina de editar la tarjeta («Listo» o «Cancelar») y luego toca Reintentar.</p>' : '') + '</div>';
-  if (N.edit) return '<div class="banner"><p class="qlab">Editando</p><p class="q">Termina de editar la tarjeta: toca «Listo» o «Cancelar».</p></div>';
-  const q = N.localQ || (t && t.question);
+  if (S.qMin) return bubbleHtml();
+  if (N.busy === 'ia') return '<div class="banner" role="status">' + qHead('La IA') + '<p class="q wait">' + spin() + '<span>La IA está pensando…</span></p></div>';
+  if (N.err) return '<div class="banner">' + qHead('La IA') + '<div class="msg err" role="alert">' + ic('alert') + '<span>' + esc(N.err) + '</span></div><div class="quick"><button class="btn" data-act="retry"' + (N.edit || N.saveAll ? ' disabled' : '') + '>' + ic('refresh') + 'Reintentar</button></div>' + (N.edit ? '<p class="hint">Termina de editar la tarjeta («Listo» o «Cancelar») y luego toca Reintentar.</p>' : '') + '</div>';
+  if (N.edit) return '<div class="banner">' + qHead('Editando') + '<p class="q">Termina de editar la tarjeta: toca «Listo» o «Cancelar».</p></div>';
+  const q = curQ(N);
   if (q) {
+    N.seenQ = qKey(N);            // la pregunta está a la vista: ya la vio
     // Con una tarjeta marcada, las respuestas rápidas de una pregunta sobre otra parte no se ofrecen: irían a la tarjeta marcada
     const other = !!(N.pin && q.section && q.section !== N.pin);
     const quick = N.localQ || other ? (other ? '<p class="hint pinq">Marcaste ' + esc(SEC_TITLE[N.pin]) + ': lo que digas va ahí. Para contestar esta pregunta, toca «Quitar» en esa tarjeta.</p>' : '') : (q.quick_replies_es || []).map((r, i) => '<button class="btn" data-act="quick" data-i="' + i + '"' + (N.edit ? ' disabled' : '') + '>' + esc(r) + '</button>').join('');
-    return '<div class="banner"><p class="qlab">' + (N.localQ ? 'Sugerencia' : 'La IA pregunta') + '</p><p class="q" id="qText">' + esc(q.text_es) + '</p><div class="quick">' + quick +
+    return '<div class="banner">' + qHead(N.localQ ? 'Sugerencia' : 'La IA pregunta') + '<p class="q" id="qText">' + esc(q.text_es) + '</p><div class="quick">' + quick +
       (N.localQ ? '<button class="btn skip" data-act="dropSugg">Quitar</button>' : '<button class="btn skip" data-act="skip"' + (N.edit ? ' disabled' : '') + '>Saltar</button>') + '</div></div>';
   }
-  if (t && t.done) return '<div class="banner done"><p class="qlab">Listo</p><p class="q">Ya tengo todo. Revisa las tarjetas, guarda cada sección y toca «Terminar nota».</p></div>';
-  return '<div class="banner"><p class="qlab">La IA</p><p class="q">Habla o escribe lo que quieras agregar.</p></div>';
+  if (t && t.done) return '<div class="banner done">' + qHead('Listo') + '<p class="q">Ya tengo todo. Revisa las tarjetas, guarda cada sección y toca «Terminar nota».</p></div>';
+  return '<div class="banner">' + qHead('La IA') + '<p class="q">Habla o escribe lo que quieras agregar.</p></div>';
+}
+function setQMin(on) {
+  const N = S.nota;
+  S.qMin = !!on;
+  if (N && on) N.seenQ = qKey(N);  // la que estaba a la vista ya la vio
+  render();
+  if (!on) { const b = $('.banner .qmin'); if (b) b.focus({ preventScroll: true }); }
+  else { const b = $('#qBub'); if (b) b.focus({ preventScroll: true }); }
 }
 function finishBtn(N) {
   const lock = N.finishing || aiBusy() || !!N.edit || !!N.saveAll;
@@ -1341,10 +1366,10 @@ function render() {
   bar.innerHTML = v.bar || '';
   bar.hidden = !v.bar;
   bar.className = 'bar' + (v.barClass ? ' ' + v.barClass : '');
-  const want = S.scrollTop ? 0 : top;
+  const want = S.scrollTop === true ? 0 : typeof S.scrollTop === 'number' ? S.scrollTop : top;      // si no, se queda donde estaba
   if (main.scrollTop !== want) main.scrollTo({ top: want, behavior: 'instant' });       // sin animación: la pantalla no «salta» al redibujar
   S.scrollTop = false;
-  if (S.scrollTo) { const el = document.getElementById(S.scrollTo); if (el) { S.scrollTo = null; const bn = main.querySelector('.banner'); main.scrollTo({ top: main.scrollTop + el.getBoundingClientRect().top - (bn ? bn.getBoundingClientRect().bottom : main.getBoundingClientRect().top) - 8, behavior: 'instant' }); } }
+  if (S.scrollTo) { const el = document.getElementById(S.scrollTo); if (el) { S.scrollTo = null; main.scrollTo({ top: main.scrollTop + el.getBoundingClientRect().top - stickyBottom(main, true) - 8, behavior: 'instant' }); } }
   if (S.sheet !== sheetSeen) { sheetSeen = S.sheet; sheetAt = Date.now(); }      // una hoja nueva (o cambiada por otra) empieza a contar sus instantes sin toques
   wrap.innerHTML = sheetHtml();
   wrap.hidden = !S.sheet;
@@ -1377,14 +1402,19 @@ function keepFocusedVisible() {
   const main = $('#main');
   if (!main.contains(el)) { el.scrollIntoView({ block: 'nearest', behavior: 'instant' }); return; }
   const mr = main.getBoundingClientRect(), r = el.getBoundingClientRect();
-  let top = mr.top + 8;
-  const bn = main.querySelector('.banner');
-  if (bn && getComputedStyle(bn).position === 'sticky') top = Math.max(top, bn.getBoundingClientRect().bottom + 8);
+  const top = Math.max(mr.top, stickyBottom(main)) + 8;
   const bottom = Math.min(mr.bottom, vpH()) - 8;
   let d = 0;
   if (r.bottom > bottom) d = r.bottom - bottom;
   if (r.top - d < top) d = r.top - top;                                       // si no cabe entero, se ve el principio
   if (Math.abs(d) >= 1) main.scrollTo({ top: main.scrollTop + d, behavior: 'instant' });
+}
+// Lo de arriba que queda fijo al bajar (la pregunta o su burbuja): lo que se busca tiene que quedar debajo.
+function stickyBottom(main, any) {
+  const bn = main.querySelector('.banner, .qbub-wrap');
+  if (!bn || (!any && getComputedStyle(bn).position !== 'sticky')) return main.getBoundingClientRect().top;
+  const r = (bn.querySelector('.qbub') || bn).getBoundingClientRect();
+  return r.bottom;
 }
 function kbSoon(ms) { clearTimeout(kbT); kbT = setTimeout(() => { kbT = null; updateKb(); keepFocusedVisible(); }, ms); }
 document.addEventListener('focusin', (e) => { if (!isField(e.target)) return; updateKb(); keepFocusedVisible(); kbSoon(250); });     // el teclado tarda en salir
@@ -1423,10 +1453,11 @@ const ACTIONS = {
   sugg(d) {
     const N = S.nota, s = ((N.turn && N.turn.suggestions) || [])[Number(d.i)];
     S.sheet = null;
-    if (s) { N.localQ = { text_es: s.text_es, section: s.section, about: 'sugerencia:' + s.kind }; N.pin = null; N.target = s.section || null; }      // eligió otro tema: se quita la marca
+    if (s) { N.localQ = { text_es: s.text_es, section: s.section, about: 'sugerencia:' + s.kind }; N.pin = null; N.target = s.section || null; S.qMin = false; }      // eligió otro tema: se quita la marca y se abre la pregunta
     render();
     const q = $('#qText'); if (q) q.scrollIntoView({ block: 'nearest' });
   },
+  minQ() { setQMin(true); }, maxQ() { setQMin(false); },
   dropSugg() { const N = S.nota; N.localQ = null; N.target = N.pin || (N.turn && N.turn.question && N.turn.question.section) || null; render(); },
   cambiarClave() { S.cp = { old: '', nw: '', rep: '', show: false, err: '', busy: false, forced: false }; go('clave'); },
   import: doImport, askLogout, doLogout, askForget, doForget,
@@ -1448,7 +1479,6 @@ document.addEventListener('input', (e) => {
   if (b === 'vit') { S.nota.edit.vit[el.dataset.key] = el.value; return; }
   if (b === 'oRest') { S.nota.edit.rest = el.checked; return; }
   if (b === 'edit.text') { S.nota.edit.text = el.value; return; }
-  if (b === 'edit.tests') { S.nota.edit.tests = el.value; return; }
   setPath(b, el.value);
   if (b === 'login.user' || b === 'login.pass') { const x = $('#loginBtn'); if (x) x.disabled = !(S.login.user.trim() && S.login.pass) || !!S.login.busy; }
   else if (/^cp\./.test(b)) { const x = $('#cpBtn'); if (x) x.disabled = !cpOk(); const l = $('#cpChecks'); if (l) l.innerHTML = policy(S.cp.nw, S.user && S.user.user, S.cp.old, S.cp.rep).map(checkLi).join(''); }

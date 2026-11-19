@@ -304,14 +304,30 @@ input[type="checkbox"] { width: 28px; height: 28px; accent-color: var(--pen); ve
 .dock .status.pinned svg { width: 20px; height: 20px; }
 .quick .pinq { flex-basis: 100%; margin: 0 0 4px; color: var(--ink); }
 
-/* ---------- guardar todo y resultados de tests ---------- */
+/* ---------- guardar todo y notas del doctor ---------- */
 .finish { display: grid; gap: 10px; }
 .finish .hint { margin: 0; }
-.otests { margin: 10px 0 0; padding: 10px 12px; background: var(--paper); border-radius: 12px; }
-.otests .en { margin: 0; }
-.edit-o label.otests { display: block; margin: 12px 0 0; padding: 10px 0 0; background: none; border-top: 1px solid var(--line); border-radius: 0; }
-.edit-o .otests textarea { min-height: 120px; }
+#card-Notas textarea { min-height: 120px; }
 .rv li { white-space: pre-wrap; }
+
+/* ---------- la pregunta se achica a una burbuja ---------- */
+.qhead { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: -10px -10px -2px 0; }
+.qhead .qlab { margin: 0; }
+.qmin { color: var(--pen); font-size: 15px; font-weight: 700; gap: 4px; padding: 0 10px; }
+.qmin svg { width: 20px; height: 20px; }
+.qbub-wrap { position: sticky; top: 0; z-index: 5; display: flex; justify-content: flex-end; margin: -8px -6px 6px; pointer-events: none; }
+.qbub {
+  pointer-events: auto; position: relative; display: inline-flex; align-items: center; gap: 8px; min-height: 56px; min-width: 56px; padding: 6px 16px 6px 12px;
+  border-radius: 999px; border: 2px solid var(--pen); background: var(--pen-soft); color: var(--pen); font-weight: 700; font-size: 16px; box-shadow: var(--shadow);
+}
+.qbub svg { width: 22px; height: 22px; }
+.qbub .spin { width: 20px; height: 20px; }
+.qbub.err { border-color: var(--stamp); background: var(--stamp-soft); color: var(--stamp); }
+.qdot { position: absolute; top: -4px; right: -2px; width: 18px; height: 18px; border-radius: 50%; background: var(--stamp); border: 3px solid var(--surface); }
+.qbub.new .qdot { animation: punto 1.6s ease-out 3; }
+@keyframes punto { 0% { box-shadow: 0 0 0 0 var(--stamp); } 100% { box-shadow: 0 0 0 10px transparent; } }
+@media (prefers-reduced-motion: reduce) { .qbub.new .qdot { animation: none; } }
+body.kb main .qbub-wrap { position: static; }
 
 /* ---------- con el teclado abierto: el campo donde se escribe siempre se ve ---------- */
 body.kb main .banner { position: static; max-height: none; }
@@ -319,3 +335,7 @@ body.kb:not(.mic-live) .bar.dock:not(:focus-within) { display: none; }
 body.kb:not(.mic-live) .bar.dock .ctl, body.kb:not(.mic-live) .bar.dock .status, body.kb:not(.mic-live) .bar.dock > .msg { display: none; }
 body.kb .bar:not(.dock) .btn.ghost:not([data-act=connectManual]), body.kb .bar:not(.dock) .note { display: none; }
 body.kb .bar { padding-top: 8px; padding-bottom: 8px; }
+
+/* ---------- lo cobrado va solo en P ---------- */
+.hint.auto { display: flex; gap: 8px; align-items: flex-start; margin: 0 0 8px; }
+.hint.auto svg { width: 18px; height: 18px; margin-top: 2px; }
