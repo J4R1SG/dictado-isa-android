@@ -1345,7 +1345,8 @@ function oCard(sec, st) {
   if (ed) {
     return '<div class="edit-o">' + O_ROWS.map((r) => {
       const neo = ((c.o_rows || {})[r] || {});
-      if (neo.state) return '<div class="r"><p class="n">' + esc(r) + ' <span class="tag">Ya está en Neo</span></p></div>';
+      const mine = secState('O').reo && (d.o_app || []).indexOf(r) >= 0;      // al corregir: la fila la escribió la app
+      if (neo.state && !mine) return '<div class="r"><p class="n">' + esc(r) + ' <span class="tag">Ya está en Neo</span></p></div>';
       const cur = ed.rows[r] || { state: '', note: '' };
       return '<div class="r"><p class="n">' + esc(r) + '</p><div class="opts">' + O_STATES.map((s) => '<button class="opt ' + s + '" data-act="oState" data-row="' + esc(r) + '" data-state="' + s + '" aria-pressed="' + (cur.state === s) + '">' + s + '</button>').join('') + '</div>' +
         (cur.state === 'Abnormal' ? '<input class="input" data-bind="oNote" data-key="' + esc(r) + '" value="' + esc(cur.note) + '" placeholder="¿Qué se vio?" aria-label="Nota de ' + esc(r) + '">' : '') + '</div>';
