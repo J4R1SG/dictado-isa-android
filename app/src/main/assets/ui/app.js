@@ -166,7 +166,7 @@ const S = {
   cp: { old: '', nw: '', rep: '', show: false, err: '', busy: false, forced: false },
   hoy: { rows: null, loading: false, err: '', srvErr: '', updated: '', seq: 0 },
   cid: null, cola: [], cons: null, nota: null, sheet: null, model: { ready: null, name: '', status: '' }, device: '',
-  mic: { state: 'idle', err: '' }, aj: { busy: '', err: '' },
+  mic: { state: 'idle', err: '' }, aj: { busy: '', err: '' }, micpc: null,
 };
 // Lo escrito y no mandado de cada consulta (solo en memoria): no se pierde al cambiar de paciente ni cuando la sesión se cierra a media nota.
 S.keep = {};
@@ -198,7 +198,7 @@ function settleUnsure(N) {                // la PC ¿usó la respuesta que se gu
   if (t === u.sent) { N.text = ''; N.typing = false; }
   else if (t.startsWith(u.sent)) N.text = t.slice(u.sent.length).trim();
 }
-const T = { hoy: null, cola: null, job: null, mic: null, toast: null, find: null };
+const T = { hoy: null, cola: null, job: null, mic: null, toast: null, find: null, micpc: null };
 function clearT(k) { if (T[k]) { clearTimeout(T[k]); T[k] = null; } }
 function resetWork() {
   Object.keys(T).forEach(clearT);
@@ -225,6 +225,8 @@ function enter(screen, fromPop) {
   if (prev === 'nota' && S.nota) { const m = $('#main'); S.nota.scrollY = m ? m.scrollTop : 0; }
   S.screen = screen;
   if (prev === 'nota' && screen !== 'nota' && screen !== 'revisar') { micCancelQuiet(); clearT('job'); }
+  if (prev === 'microfono' && screen !== 'microfono') { micCancelQuiet(); if (S.micpc) S.micpc.live = false; clearT('micpc'); S.mic.err = ''; }
+  if (prev !== 'microfono' && screen === 'microfono' && S.mic.state !== 'idle') micCancelQuiet();
   if (screen !== 'hoy') clearT('hoy');
   if (screen !== 'nota' && screen !== 'revisar') S.scrollTo = null;
   if (prev === 'nota' && screen !== 'nota') S.mic.err = '';
@@ -238,6 +240,7 @@ function enter(screen, fromPop) {
     if (S.nota.busy === 'ia' && S.nota.job && !T.job) pollJob(S.nota, S.nota.job, 0);        // se salió mientras la IA pensaba: se sigue esperando
   }
   else if (screen === 'ajustes') { loadAjustes(); }
+  else if (screen === 'microfono') { enterMic(); }
   else if (screen === 'revisar') { if (!S.nota) { S.screen = 'hoy'; loadHoy(false); return; } }
   if (/^(consulta|nota|revisar)$/.test(S.screen) && colaPending()) ensureCola();
   render();
@@ -561,6 +564,7 @@ async function loadNota() {
     modelStatus();
     if (N.draft && N.draft.terminada) { N.finished = true; if (br.turn) N.turn = br.turn; replace('revisar'); return; }    // ya se terminó: la PC no deja cambiar nada
     if (br.turn) applyTurn(br.turn, true);
+    else if (N.rapidaIn) render();                 // nota rápida: primero habla la doctora, la IA no pregunta
     else { render(); startJob({ answer_es: '', start: true }); }
     if (colaPending()) ensureCola(true);
     return;
@@ -606,6 +610,7 @@ const sections = () => MODE_SECTIONS[noteMode()];
 function applyTurn(turn, resume) {
   const N = S.nota;
   N.turn = turn;
+  if (turn.rapida && !resume) N.rapidaIn = false;   // la nota rápida ya está en las tarjetas
   N.pvFresh = !resume;            // el texto de «preview» solo vale en un turno recién hecho (después de editar o al reabrir queda viejo)
   if (turn.draft) N.draft = turn.draft;
   N.busy = ''; N.err = ''; N.localQ = null;
@@ -677,6 +682,12 @@ async function retryJob() {
   const N = S.nota;
   if (!N || N.edit || N.saveAll) return;           // con una tarjeta abierta o mientras «Guardar todo» manda secciones no se reintenta
   if (!N.last) { loadNota(); return; }
+  if (N.last.rapida) {
+    if (N.job && N.jobLost) { N.busy = 'ia'; N.err = ''; N.jobLost = false; render(); pollJob(N, N.job, 0); return; }
+    if (!String(N.text || '').trim()) N.text = N.last.text_es;
+    startRapida(true);
+    return;
+  }
   const tg = N.last.solo && N.last.target;
   if (tg && !(N.job && N.jobLost) && (N.saving[tg] || secState(tg).pending)) { toast(MSG_GUARDANDO); return; }    // la tarjeta marcada se está guardando: esa respuesta no tendría dónde ir
   N.busy = 'ia'; N.err = ''; render();
@@ -739,9 +750,11 @@ function secState(sec) {
   const st = it ? { status: it.status, detail: it.detail || '' } : (est ? { status: est.status, detail: est.detail || '' } : null);
   const inSaved = (d.saved || []).indexOf(sec) >= 0;
   const status = st ? st.status : '';
-  const locked = noteClosed() || inSaved || status === 'guardada' || status === 'sin cambios';        // con error y aun «guardada» en la PC (no coincidió al releer): sigue con candado
-  return { status, detail: st ? st.detail : '', locked, done: status === 'guardada' || status === 'sin cambios', pending: !!status && !FINAL[status], error: status === 'error',
-    doubt: (d.dudas_neo || {})[sec] || '' };
+  const reo = inSaved && (d.reabiertas || []).indexOf(sec) >= 0;      // «Corregir»: abierta otra vez para cambiarla
+  const locked = !reo && (noteClosed() || inSaved || status === 'guardada' || status === 'sin cambios');        // con error y aun «guardada» en la PC (no coincidió al releer): sigue con candado
+  const pending = !!status && !FINAL[status];
+  return { status: reo && !pending ? '' : status, detail: st && !reo ? st.detail : '', locked, done: !reo && (status === 'guardada' || status === 'sin cambios'), pending, error: !reo && status === 'error',
+    doubt: (d.dudas_neo || {})[sec] || '', reo, fix: locked && !pending && (d.corregibles || []).indexOf(sec) >= 0 };
 }
 function filled(sec) {
   const d = (S.nota && S.nota.draft) || {};
@@ -919,13 +932,15 @@ async function doFinish() {
 const micOk = () => S.model.ready !== false;
 function micBusy() { return S.mic.state === 'cargando' || S.mic.state === 'transcribiendo'; }
 async function micTap() {
-  const N = S.nota;
-  if (!N) return;
+  const N = S.nota, P = S.screen === 'microfono' ? S.micpc : null;
+  if (!N && !P) return;
+  if (P && P.live) { P.live = false; if (S.mic.state === 'escuchando') { S.mic.state = 'transcribiendo'; render(); armTranscribe(); try { await call('micStop', {}, 15000); } catch (e) { S.mic.state = 'idle'; render(); } } else render(); return; }
   if (S.mic.state === 'idle') {
-    if (N.busy || N.edit) return;
+    if (P ? !P.sid : (N.busy || N.edit)) return;
     if (!micOk()) { S.mic.err = 'Falta el modelo de voz. Entra a Ajustes e importa el modelo, o escribe tu respuesta.'; render(); return; }
+    if (P) P.live = true;
     S.mic.err = ''; S.mic.state = 'escuchando'; render();
-    try { await call('micStart', {}, 15000); } catch (e) { S.mic.state = 'idle'; S.mic.err = 'No se pudo prender el micrófono. Abre los ajustes del teléfono, entra a esta app y dale permiso al micrófono. Mientras tanto puedes escribir.'; render(); }
+    try { await call('micStart', P ? { autoStop: true } : {}, 15000); } catch (e) { if (P) P.live = false; S.mic.state = 'idle'; S.mic.err = 'No se pudo prender el micrófono. Abre los ajustes del teléfono, entra a esta app y dale permiso al micrófono. Mientras tanto puedes escribir.'; render(); }
   } else if (S.mic.state === 'escuchando') {
     S.mic.state = 'transcribiendo'; render(); armTranscribe();
     try { await call('micStop', {}, 15000); } catch (e) { S.mic.state = 'idle'; S.mic.err = errText(e); render(); }
@@ -954,8 +969,12 @@ function onEvent(ev, data) {
     clearT('mic');
     S.mic.state = 'idle';
     const t = String(data && typeof data === 'object' ? data.text : data || '').trim();
-    const N = S.nota;
-    if (!t) S.mic.err = 'No se escuchó nada. Intenta otra vez o escribe.';
+    const N = S.nota, P = S.screen === 'microfono' ? S.micpc : null;
+    if (P && P.sid) {                     // micrófono de otra PC: la frase se manda y, si sigue prendido, vuelve a escuchar
+      S.mic.err = '';
+      if (t) micSend(t);
+      if (P.live) setTimeout(() => { if (S.micpc === P && P.live && S.screen === 'microfono' && S.mic.state === 'idle') { S.mic.state = 'escuchando'; render(); call('micStart', { autoStop: true }, 15000).catch(() => { P.live = false; S.mic.state = 'idle'; render(); }); } }, 250);
+    } else if (!t) S.mic.err = 'No se escuchó nada. Intenta otra vez o escribe.';
     else if (N) { S.mic.err = ''; N.text = (N.text ? N.text + ' ' : '') + t; N.typing = true; }
     render();
   }
@@ -963,6 +982,177 @@ function onEvent(ev, data) {
 async function modelStatus() {
   try { const r = await call('modelStatus', {}, 8000); S.model = { ready: !!r.ready, name: r.name || '', status: r.status || '' }; } catch (e) { S.model = { ready: null, name: '', status: '' }; }
   if (S.screen === 'nota' || S.screen === 'ajustes') render();
+}
+
+
+// --- nota rápida: la doctora habla de corrido, la IA arma la nota entera y dice qué falta (nada va a Neo sin que ella guarde)
+async function openRapida() {
+  const c = S.cons && S.cons.c;
+  if (!c || !canInterview(c)) return;
+  const old = S.nota;
+  if (old && old.loaded && String(old.cid) === String(S.cid) && !noteClosed()) { old.rapidaIn = true; go('nota'); render(); return; }
+  stashNota();
+  S.nota = newNota(S.cid);
+  S.nota.rapidaIn = true;
+  unstashNota(S.nota);
+  go('nota');
+  loadNota();
+}
+function startRapida(retry) {
+  const N = S.nota;
+  const t = String((N && N.text) || '').trim();
+  if (!N || !t || N.busy === 'ia') return;
+  N.last = { rapida: true, text_es: t }; N.busy = 'ia'; N.err = ''; N.job = 0; N.jobLost = false; N.failSince = 0; N.sentOk = false;
+  N.sentRaw = String(N.text || '');
+  if (!retry) { N.snap = snapText(N); N.dirty = false; N.refusedRaw = null; }
+  micCancelQuiet();
+  render();
+  api('POST', '/api/v1/nota-rapida', { date: dayKey(S.day), id: N.cid, text_es: t }).then((r) => { N.job = r.job; N.sentOk = true; pollJob(N, r.job, 0); }).catch((e) => {
+    if (S.nota !== N || e.handled) return;
+    if (e.status) { N.refusedRaw = N.sentRaw; N.sentRaw = null; }
+    N.busy = ''; N.err = errText(e); render();
+  });
+}
+function vRapida(N, top) {
+  const busy = N.busy === 'ia', ms = S.mic.state;
+  let m = '<div class="card"><h3>Nota rápida</h3><p class="muted">Cuenta toda la consulta de corrido, sin preguntas: lo que dice el dueño, el examen, el diagnóstico, lo que se hizo, lo que va para la casa y el recheck. La IA arma la nota en inglés y te dice qué falta. Nada se guarda en Neo hasta que tú lo apruebes.</p>' +
+    '<textarea class="input big" id="ans" data-bind="nota.text" rows="10" placeholder="Habla o escribe aquí en español" aria-label="Lo que dictas en español"' + (busy ? ' disabled' : '') + '>' + esc(N.text) + '</textarea></div>';
+  if (busy) m += '<div class="wait" role="status">' + spin() + '<span>La IA está armando la nota…</span></div>';
+  if (N.err) m += '<div class="msg err" role="alert">' + ic('alert') + '<span>' + esc(N.err) + '</span></div><button class="btn ghost block" data-act="retry">' + ic('refresh') + 'Reintentar</button>';
+  if (N.turn) m += '<button class="btn ghost block" data-act="rapidaSalir"' + (busy ? ' disabled' : '') + '>Volver a las tarjetas</button>';
+  const st = ms === 'escuchando' ? 'Escuchando… toca el micrófono para terminar' : ms === 'transcribiendo' ? 'Transcribiendo…' : ms === 'cargando' ? 'Preparando la voz…' : busy ? 'La IA está pensando…' : (!micOk() ? 'Falta el modelo de voz. Puedes escribir.' : 'Toca el micrófono y habla');
+  let dock = '';
+  if (S.mic.err && ms === 'idle' && !busy) dock += '<div class="msg warn" role="alert">' + ic('alert') + '<span>' + esc(S.mic.err) + '</span></div>';
+  dock += '<div class="status' + (ms === 'escuchando' ? ' live' : '') + '" role="status">' + (ms === 'transcribiendo' || ms === 'cargando' || busy ? spin() : '') + '<span>' + esc(st) + '</span>' + (ms === 'escuchando' ? '<button class="btn link" data-act="micCancel">Cancelar</button>' : '') + '</div>';
+  dock += '<div class="ctl"><button class="btn ghost" data-act="clearText"' + (busy ? ' disabled' : '') + '>Borrar</button>' +
+    '<button class="mic' + (ms === 'escuchando' ? ' on' : '') + (micBusy() ? ' busy' : '') + '" id="micBtn" data-act="mic" aria-label="' + (ms === 'escuchando' ? 'Terminar de hablar' : 'Hablar') + '"' + ((busy && ms !== 'escuchando') || micBusy() ? ' disabled' : '') + '>' + ic(ms === 'escuchando' ? 'stop' : 'mic') + '</button>' +
+    '<button class="btn primary" id="sendBtn" data-act="rapidaGo"' + (busy || !String(N.text).trim() || ms === 'escuchando' ? ' disabled' : '') + '>' + ic('send') + 'Hacer la nota</button></div>';
+  return { top, main: m, bar: dock, barClass: 'dock' };
+}
+
+// --- corregir una sección ya guardada: se abre otra vez, se cambia y se guarda (solo cambia lo que escribió la app)
+async function reabrir(sec) {
+  const N = S.nota;
+  if (!N || aiBusy() || N.saveAll || N.saving[sec]) return;
+  if (N.edit) { toast(MSG_EDITANDO); return; }
+  N.saving[sec] = true; N.saveErr[sec] = ''; N.warn[sec] = ''; render();
+  try {
+    const r = await api('POST', '/api/v1/reabrir', { date: dayKey(S.day), id: N.cid, section: sec });
+    if (S.nota !== N) return;
+    if (r.draft) { N.draft = r.draft; if (N.turn) N.turn.draft = r.draft; }
+    N.saving[sec] = false; N.dirty = true;
+    startEdit(sec);
+    toast('Ya puedes cambiar ' + SEC_SHORT[sec] + '. Al terminar toca «Listo» y luego «Guardar cambios».');
+    return;
+  } catch (e) { if (S.nota !== N) return; N.saving[sec] = false; if (!e.handled) N.saveErr[sec] = errText(e); }
+  render();
+}
+
+// ---------------------------------------------------------------- micrófono para otra computadora
+// La otra PC abre la página de dictado y muestra un QR (o un código de 4 números). La app se une por su conexión
+// segura con la PC principal y manda cada frase que transcribe Parakeet: aparece en la página de esa PC.
+const MIC_QR = /^[A-Za-z0-9_-]{16,64}$/;
+function newMicPc() { return { sid: '', label: '', cid: null, pc: false, code: '', err: '', busy: '', live: false, sent: [] }; }
+function enterMic() { if (!S.micpc) S.micpc = newMicPc(); modelStatus(); if (S.micpc.sid) micPoll(true); }
+function micPoll(now) { clearT('micpc'); T.micpc = setTimeout(micEstado, now ? 30 : 3000); }
+async function micEstado() {
+  const P = S.micpc;
+  if (!P || !P.sid || S.screen !== 'microfono' || !S.user) return;
+  try {
+    const r = await api('GET', '/api/v1/mic/estado?sid=' + encodeURIComponent(P.sid));
+    if (S.micpc !== P) return;
+    const changed = P.label !== r.label || P.pc !== !!r.pc || P.cid !== r.cid;
+    P.label = r.label || ''; P.pc = !!r.pc; P.cid = r.cid == null ? null : r.cid;
+    if (changed) render();
+  } catch (e) {
+    if (S.micpc !== P || e.handled) return;
+    if (e.status === 404) { micGone(P, 'La otra computadora ya no está esperando. Escanea el código otra vez.'); return; }
+  }
+  micPoll(false);
+}
+function micGone(P, msg) { micCancelQuiet(); P.live = false; P.sid = ''; P.label = ''; P.cid = null; P.err = msg; clearT('micpc'); render(); }
+async function micJoin(args) {
+  const P = S.micpc;
+  if (!P || P.busy) return;
+  P.busy = 'Conectando…'; P.err = ''; render();
+  try {
+    const r = await api('POST', '/api/v1/mic/unir', args);
+    if (S.micpc !== P) return;
+    Object.assign(P, { sid: r.sid, label: r.label || '', cid: r.cid == null ? null : r.cid, pc: !!r.pc, code: '', busy: '', sent: [] });
+    toast('Listo. Lo que digas aparece en la otra computadora.');
+    micPoll(false);
+  } catch (e) { if (S.micpc !== P || e.handled) return; P.busy = ''; P.err = errText(e); }
+  render();
+}
+async function micScan() {
+  const P = S.micpc;
+  if (!P || P.busy) return;
+  P.err = ''; render();
+  let qr = '';
+  try { qr = String(((await call('scanQr', {}, 180000)) || {}).qr || ''); } catch (e) { P.err = errText(e); render(); return; }
+  if (!MIC_QR.test(qr)) { P.err = 'Ese no es el código del micrófono. Escanea el QR de la página de dictado.'; render(); return; }
+  micJoin({ qr });
+}
+function micCode() {
+  const P = S.micpc, c = String((P && P.code) || '').trim();
+  if (!/^\d{4}$/.test(c)) { P.err = 'Escribe los 4 números que muestra la otra computadora.'; render(); return; }
+  micJoin({ code: c });
+}
+async function micSend(text, entry) {
+  const P = S.micpc;
+  if (!P || !P.sid) return;
+  const e = entry || { t: text, st: 'enviando' };
+  if (!entry) { P.sent.unshift(e); P.sent = P.sent.slice(0, 12); }
+  e.st = 'enviando'; render();
+  try {
+    const r = await api('POST', '/api/v1/mic/texto', { sid: P.sid, text: e.t, cid: P.cid });
+    if (S.micpc !== P) return;
+    e.st = 'ok'; P.err = ''; P.pc = !!r.pc; P.label = r.label || P.label;
+  } catch (x) {
+    if (S.micpc !== P || x.handled) return;
+    if (x.status === 404) { micGone(P, 'La otra computadora ya no está esperando. Escanea el código otra vez.'); return; }
+    e.st = 'error';
+    P.err = errText(x);
+    if (x.status === 409) micPoll(true);            // la otra PC cambió de paciente: se mira cuál es ahora
+  }
+  render();
+}
+function micResend(i) { const P = S.micpc, e = P && P.sent[Number(i)]; if (e && e.st === 'error') micSend(e.t, e); }
+async function micLeave() {
+  const P = S.micpc;
+  if (!P) return;
+  const sid = P.sid;
+  micCancelQuiet(); P.live = false; clearT('micpc');
+  S.micpc = newMicPc(); render();
+  if (sid) api('POST', '/api/v1/mic/salir', { sid }).catch(() => {});
+}
+function vMicrofono() {
+  const P = S.micpc || newMicPc();
+  const top = topBar({ back: true, title: 'Micrófono', sub: 'Para otra computadora' });
+  let m = '';
+  if (!P.sid) {
+    m += '<div class="card"><h3>Usa el teléfono como micrófono</h3><p class="muted">En la otra computadora abre la página de dictado y la consulta. Ahí sale un código QR.</p>' +
+      '<button class="btn primary block" data-act="micScan"' + (P.busy ? ' disabled' : '') + '>' + (P.busy ? spin() + esc(P.busy) : ic('grid') + 'Escanear el código QR') + '</button></div>' +
+      '<div class="card flat"><h3>O escribe el código</h3><p class="muted">Los 4 números que salen debajo del QR.</p>' +
+      '<input class="input" id="micCode" data-bind="micpc.code" inputmode="numeric" maxlength="4" autocomplete="off" aria-label="Código de 4 números" value="' + esc(P.code) + '">' +
+      '<button class="btn ghost block" data-act="micCode"' + (P.busy ? ' disabled' : '') + '>Conectar</button></div>';
+    if (P.err) m += '<div class="msg err" role="alert">' + ic('alert') + '<span>' + esc(P.err) + '</span></div>';
+    return { top, main: m };
+  }
+  m += '<div class="card green" role="status"><p><b>Conectado</b>' + (P.label ? ': dictando para ' + esc(P.label) : '') + '</p><p class="muted">' +
+    (P.pc ? 'La otra computadora está esperando lo que digas.' : 'La otra computadora no contesta. Revisa que la página de dictado siga abierta.') + '</p></div>';
+  if (P.err) m += '<div class="msg err" role="alert">' + ic('alert') + '<span>' + esc(P.err) + '</span></div>';
+  m += '<div class="card flat"><h3>Lo que mandaste</h3>' + (P.sent.length ? '<ul class="lines">' + P.sent.map((e, i) => '<li><span class="nm">' + esc(e.t) + '</span><span>' +
+    (e.st === 'ok' ? '<span class="tag ok">Mandado</span>' : e.st === 'error' ? '<button class="btn ghost small" data-act="micResend" data-i="' + i + '">Mandar otra vez</button>' : spin()) + '</span></li>').join('') + '</ul>'
+    : '<p class="muted">Toca el micrófono y habla. Cada frase aparece en la otra computadora.</p>') + '</div>';
+  m += '<button class="btn ghost block" data-act="micLeave">Desconectar</button>';
+  const ms = S.mic.state;
+  const st = ms === 'escuchando' ? 'Escuchando… cuando hagas una pausa se manda lo que dijiste' : ms === 'transcribiendo' ? 'Pasando la voz a texto…' : ms === 'cargando' ? 'Preparando la voz…' : (!micOk() ? 'Falta el modelo de voz. Entra a Ajustes e importa el modelo.' : 'Toca el micrófono y habla');
+  let dock = '';
+  if (S.mic.err && ms === 'idle') dock += '<div class="msg warn" role="alert">' + ic('alert') + '<span>' + esc(S.mic.err) + '</span></div>';
+  dock += '<div class="status' + (ms === 'escuchando' ? ' live' : '') + '" role="status">' + (ms === 'transcribiendo' || ms === 'cargando' ? spin() : '') + '<span>' + esc(st) + '</span>' + (ms === 'escuchando' ? '<button class="btn link" data-act="micCancel">Parar</button>' : '') + '</div>';
+  dock += '<div class="ctl"><span></span><button class="mic' + (ms === 'escuchando' ? ' on' : '') + (micBusy() ? ' busy' : '') + '" id="micBtn" data-act="mic" aria-label="' + (P.live ? 'Parar el micrófono' : 'Hablar') + '"' + (micBusy() && !P.live ? ' disabled' : '') + '>' + ic(P.live ? 'stop' : 'mic') + '</button><span></span></div>';
+  return { top, main: m, bar: dock, barClass: 'dock' };
 }
 
 // ---------------------------------------------------------------- ajustes
@@ -1087,7 +1277,7 @@ function vHoy() {
   const nav = '<div class="daynav"><button class="icon-btn" data-act="prevDay" aria-label="Día anterior">' + ic('back') + '</button><div class="day"><b>' + esc(dayLabel(S.day)) + '</b><small>' + esc(daySub(S.day)) + (H.updated ? ' · Actualizado ' + esc(H.updated) : '') + '</small></div><button class="icon-btn" data-act="nextDay" aria-label="Día siguiente">' + ic('next') + '</button></div>' +
     (sameDay(S.day, new Date()) ? '' : '<button class="btn ghost block today" data-act="today">Ir a hoy</button>');
   const bar = '<button class="btn primary block" data-act="refresh"' + (H.loading ? ' disabled' : '') + '>' + (H.loading ? spin() + 'Actualizando…' : ic('refresh') + 'Actualizar') + '</button>';
-  return { top: topBar({ title: 'Consultas', sub: S.user ? S.user.name : '', right: '<button class="icon-btn" data-act="ajustes" aria-label="Ajustes">' + ic('gear') + '</button>' }), main: nav + body, bar };
+  return { top: topBar({ title: 'Consultas', sub: S.user ? S.user.name : '', right: '<button class="icon-btn txt" data-act="microfono">' + ic('mic') + 'Micrófono</button><button class="icon-btn" data-act="ajustes" aria-label="Ajustes">' + ic('gear') + '</button>' }), main: nav + body, bar };
 }
 
 const vitalCell = (lbl, v, u) => '<div><b>' + (v == null || v === '' ? '—' : esc(v) + ' <small>' + esc(u) + '</small>') + '</b><span>' + esc(lbl) + '</span></div>';
@@ -1143,6 +1333,7 @@ function vConsulta() {
   }
   const dst = (K.draftInfo || {}).state, lbl = dst === 'terminada' ? 'Ver la nota terminada' : dst === 'empezada' ? 'Seguir con la nota' : 'Empezar nota con IA';
   const bar = '<button class="btn primary block" data-act="empezar"' + (can ? '' : ' disabled') + '>' + ic('mic') + lbl + '</button>' +
+    (dst === 'terminada' ? '' : '<button class="btn ghost block" data-act="rapida"' + (can ? '' : ' disabled') + '>' + ic('chat') + 'Nota rápida (hablar de corrido)</button>') +
     (can ? '' : '<p class="note">' + esc(c.locked ? 'La nota está bloqueada en Neo.' : (c.aviso || 'Primero toca Crear SOAP o Plantilla de cirugía')) + '</p>');
   return { top, main: m, bar };
 }
@@ -1213,7 +1404,8 @@ function card(sec) {
   h += bodyCard(sec);
   if (AUTO[sec] && !st.locked && autoOpen(d, sec).length) h += '<p class="hint auto">' + ic('cart') + '<span>' + (sec === 'P' ? 'Lo que se cobró se pone solo en el Plan.' : 'Lo que se cobró para la casa se pone solo aquí.') + ' No hace falta decirlo.</span></p>';
   if (es && !ed) h += '<p class="es">Lo que dijiste: «' + esc(es) + '»</p>';
-  if (st.done) h += '<div class="msg ok">' + ic('lock') + '<span><b>Guardada en Neo.</b> Ya no se puede cambiar desde aquí.</span></div>';
+  if (st.done) h += '<div class="msg ok">' + ic('lock') + '<span><b>Guardada en Neo.</b> ' + (st.fix ? 'Si hace falta cambiarla, toca «Corregir».' : 'Ya no se puede cambiar desde aquí.') + '</span></div>';
+  if (st.reo && !ed) h += '<div class="msg warn">' + ic('edit') + '<span>Abierta para corregir. Cuando esté bien, toca «Guardar cambios». Solo se cambia lo que escribió la app.</span></div>';
   if (st.doubt) h += '<div class="msg warn" role="alert">' + ic('alert') + '<span>' + esc(st.doubt) + '</span></div>';
   if (st.error) h += '<div class="msg err" role="alert">' + ic('alert') + '<span>' + esc(st.detail || 'No se pudo guardar en Neo.') + (st.locked ? '' : ' Toca «Guardar sección» para intentar otra vez.') + '</span></div>';
   if (N.saveErr[sec]) h += '<div class="msg err" role="alert">' + ic('alert') + '<span>' + esc(N.saveErr[sec]) + '</span></div>';
@@ -1222,9 +1414,10 @@ function card(sec) {
   h += '<div class="nfoot">';
   if (ed) h += '<button class="btn save" data-act="editOk"' + ((N.edit.busy || lockAI) ? ' disabled' : '') + '>' + (N.edit.busy ? spin() + 'Guardando…' : 'Listo') + '</button><button class="btn ghost" data-act="editCancel">Cancelar</button>';
   else {
-    h += '<button class="btn ghost" data-act="edit" data-sec="' + sec + '"' + ((st.locked || lockAI || N.saving[sec] || st.pending || N.edit || N.saveAll) ? ' disabled' : '') + '>' + ic('edit') + 'Editar</button>';
+    if (st.fix) h += '<button class="btn ghost" data-act="reabrir" data-sec="' + sec + '"' + ((lockAI || N.saving[sec] || N.edit || N.saveAll) ? ' disabled' : '') + '>' + ic('edit') + 'Corregir</button>';
+    else h += '<button class="btn ghost" data-act="edit" data-sec="' + sec + '"' + ((st.locked || lockAI || N.saving[sec] || st.pending || N.edit || N.saveAll) ? ' disabled' : '') + '>' + ic('edit') + 'Editar</button>';
     const busy = N.saving[sec] || st.pending;
-    h += '<button class="btn save' + (ready ? ' ready' : '') + '" data-act="save" data-sec="' + sec + '"' + ((st.locked || busy || lockAI || !filled(sec) || N.saveAll) ? ' disabled' : '') + '>' + (busy ? spin() + 'Guardando…' : (st.locked ? (st.error ? 'Revisar en Neo' : 'Guardada') : 'Guardar sección')) + '</button>';
+    h += '<button class="btn save' + (ready ? ' ready' : '') + '" data-act="save" data-sec="' + sec + '"' + ((st.locked || busy || lockAI || (!filled(sec) && !st.reo) || N.saveAll) ? ' disabled' : '') + '>' + (busy ? spin() + 'Guardando…' : (st.locked ? (st.error ? 'Revisar en Neo' : 'Guardada') : st.reo ? 'Guardar cambios' : 'Guardar sección')) + '</button>';
   }
   return h + '</div></article>';
 }
@@ -1253,6 +1446,12 @@ function bannerHtml() {
     return '<div class="banner">' + qHead(N.localQ ? 'Sugerencia' : 'La IA pregunta') + '<p class="q" id="qText">' + esc(q.text_es) + '</p><div class="quick">' + quick +
       (N.localQ ? '<button class="btn skip" data-act="dropSugg">Quitar</button>' : '<button class="btn skip" data-act="skip"' + (N.edit ? ' disabled' : '') + '>Saltar</button>') + '</div></div>';
   }
+  if (t && t.rapida) {
+    const falta = (t.missing || []).map((x) => x && x.text_es).filter(Boolean);
+    return '<div class="banner done">' + qHead('Nota rápida') + '<p class="q">' + (falta.length ? 'La nota está en las tarjetas. Revisa lo que falta:' : 'La nota está en las tarjetas. No vi nada que falte.') + '</p>' +
+      (falta.length ? '<ul class="falta">' + falta.map((x) => '<li>' + esc(x) + '</li>').join('') + '</ul>' : '') +
+      '<p class="hint">Puedes decir lo que falta con el micrófono o tocar «Editar». Nada está en Neo todavía: guarda cada sección o toca «Guardar todo en Neo».</p></div>';
+  }
   if (t && t.done) return '<div class="banner done">' + qHead('Listo') + '<p class="q">Ya tengo todo. Revisa las tarjetas, guarda cada sección y toca «Terminar nota».</p></div>';
   return '<div class="banner">' + qHead('La IA') + '<p class="q">Habla o escribe lo que quieras agregar.</p></div>';
 }
@@ -1274,8 +1473,9 @@ function vNota() {
   if (N.loading) return { top, main: '<div class="wait" role="status">' + spin('big') + '<span>Abriendo la nota…</span></div>' };
   if (N.err && !N.loaded) return { top, main: '<div class="msg err" role="alert">' + ic('alert') + '<span>' + esc(N.err) + '</span></div><button class="btn ghost block" data-act="reloadNota">Intentar otra vez</button>' };
   const closed = noteClosed();
+  if (N.rapidaIn && !closed) return vRapida(N, topBar({ back: true, title: (c && c.patient) || 'Nota', sub: 'Nota rápida' }));
   pinCheck(N);                    // se guardó o se terminó la nota: la marca se quita sola
-  let m = closed ? '<div class="banner done"><p class="qlab">Nota terminada</p><p class="q">Ya no se puede cambiar desde aquí. Si falta algo, corrígelo en Neo.</p></div>' : bannerHtml();
+  let m = closed ? '<div class="banner done"><p class="qlab">Nota terminada</p><p class="q">Si hace falta cambiar algo que ya está en Neo, toca «Corregir» en esa parte.</p></div>' : bannerHtml();
   if (!closed && noteMode() === 'simple') m += '<div class="msg warn">' + ic('note') + '<span>Esta nota ya tiene texto sin SOAP. La IA escribirá cada parte como un párrafo nuevo.</span></div>';
   m += sections().map(card).join('');
   if (closed) return { top, main: m, bar: '<button class="btn primary block" data-act="revisar">Ver el resumen</button>' };
@@ -1327,7 +1527,7 @@ function vRevisar() {
   const q = colaOf();
   if (q.length) m += '<div class="card flat"><h3>Lo que va para Neo</h3>' + colaItemsHtml(q) + '</div>';
   const fin = N.finished || d.terminada;
-  const bar = fin ? '<button class="btn primary block" data-act="home">Volver a las consultas</button>'
+  const bar = fin ? '<button class="btn ghost block" data-act="corregirNota">Corregir algo</button><button class="btn primary block" data-act="home">Volver a las consultas</button>'
     : saveAllBtn(N) + finishBtn(N) + (N.edit ? '<p class="note">' + MSG_EDITANDO + '</p>' : '');
   return { top, main: m, bar };
 }
@@ -1369,7 +1569,7 @@ function sheetHtml() {
 }
 
 // ---------------------------------------------------------------- dibujar
-const VIEWS = { boot: vBoot, entrar: vEntrar, clave: vClave, hoy: vHoy, consulta: vConsulta, nota: vNota, revisar: vRevisar, ajustes: vAjustes };
+const VIEWS = { boot: vBoot, entrar: vEntrar, clave: vClave, hoy: vHoy, consulta: vConsulta, nota: vNota, revisar: vRevisar, ajustes: vAjustes, microfono: vMicrofono };
 let sheetSeen = null, sheetAt = 0;
 const sheetFresh = () => !!S.sheet && SHEET_GUARD() > 0 && Date.now() - sheetAt < SHEET_GUARD();
 function render() {
@@ -1396,7 +1596,7 @@ function render() {
   else if (fid) { const el = document.getElementById(fid); if (el) { el.focus({ preventScroll: true }); try { el.setSelectionRange(sel[0], sel[1]); } catch (e) { /* tipo sin selección */ } keepFocusedVisible(); } }
   else if (keyAttr && bindAttr) { const el = document.querySelector('[data-bind="' + bindAttr + '"][data-key="' + keyAttr + '"]'); if (el) { el.focus({ preventScroll: true }); keepFocusedVisible(); } }
   if (S.nota && S.nota.changed && S.nota.changed.length) { const N = S.nota; setTimeout(() => { N.changed = []; }, 0); }   // el destello de «cambió» corre una sola vez
-  if (S.screen === 'nota') { const b = $('#micBtn'); if (b && S.mic.state !== 'escuchando') b.style.setProperty('--lvl', '0'); }
+  if (S.screen === 'nota' || S.screen === 'microfono') { const b = $('#micBtn'); if (b && S.mic.state !== 'escuchando') b.style.setProperty('--lvl', '0'); }
   document.body.classList.toggle('mic-live', S.mic.state === 'escuchando' || S.mic.state === 'transcribiendo');      // grabando: parar y cancelar siempre a la vista
   updateKb();                     // si el campo con el cursor ya no está, el micrófono vuelve
 }
@@ -1480,6 +1680,9 @@ const ACTIONS = {
   dropSugg() { const N = S.nota; N.localQ = null; N.target = N.pin || (N.turn && N.turn.question && N.turn.question.section) || null; render(); },
   cambiarClave() { S.cp = { old: '', nw: '', rep: '', show: false, err: '', busy: false, forced: false }; go('clave'); },
   import: doImport, askLogout, doLogout, askForget, doForget,
+  microfono() { go('microfono'); }, micScan, micCode, micLeave, micResend(d) { micResend(d.i); },
+  rapida: openRapida, rapidaGo() { startRapida(false); }, rapidaSalir() { const N = S.nota; if (N && N.busy !== 'ia') { N.rapidaIn = false; render(); } },
+  reabrir(d) { reabrir(d.sec); }, corregirNota() { if (S.nota) go('nota'); },
 };
 document.addEventListener('click', (e) => {
   if (/^(INPUT|TEXTAREA|SELECT|LABEL)$/.test(e.target.tagName)) return;
@@ -1502,6 +1705,7 @@ document.addEventListener('input', (e) => {
   if (b === 'login.user' || b === 'login.pass') { const x = $('#loginBtn'); if (x) x.disabled = !(S.login.user.trim() && S.login.pass) || !!S.login.busy; }
   else if (/^cp\./.test(b)) { const x = $('#cpBtn'); if (x) x.disabled = !cpOk(); const l = $('#cpChecks'); if (l) l.innerHTML = policy(S.cp.nw, S.user && S.user.user, S.cp.old, S.cp.rep).map(checkLi).join(''); }
   else if (b === 'nota.text') { const x = $('#sendBtn'); if (x) x.disabled = !String(S.nota.text).trim() || S.nota.busy === 'ia' || !!S.nota.edit; }
+  else if (b === 'micpc.code' && el.value.replace(/\D/g, '').length === 4 && S.micpc && !S.micpc.busy) { S.micpc.code = el.value.replace(/\D/g, ''); }
 });
 document.addEventListener('change', (e) => { if (e.target.dataset && e.target.dataset.bind === 'oRest') S.nota.edit.rest = e.target.checked; });
 document.addEventListener('keydown', (e) => {
@@ -1509,6 +1713,7 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && e.target.tagName === 'INPUT') {
     if (S.screen === 'entrar') { if (S.login.phase === 'form') doLogin(); else if (S.login.phase === 'manual') ACTIONS.connectManual(); }
     else if (S.screen === 'clave') doChangePw();
+    else if (S.screen === 'microfono' && e.target.id === 'micCode') micCode();
   }
 });
 
