@@ -162,8 +162,7 @@ class BridgeTest {
     @Test
     fun micQrOnlyAcceptsThePairKey() {
         assertEquals("abcdEFGH1234_-xyzQRS", Bridge.micQr("NEOMIC1:abcdEFGH1234_-xyzQRS"))
-        assertEquals("abcdEFGH1234_-xyzQRS", Bridge.micQr("  NEOMIC1:abcdEFGH1234_-xyzQRS
-"))
+        assertEquals("abcdEFGH1234_-xyzQRS", Bridge.micQr("  NEOMIC1:abcdEFGH1234_-xyzQRS "))
         assertNull(Bridge.micQr("NEOMIC1:short"))
         assertNull(Bridge.micQr("http://192.168.2.18:8767/d/abcdEFGH1234_-xyzQRS"))
         assertNull(Bridge.micQr("NEOMIC1:abcd/../EFGH1234xyzQRS"))
