@@ -22,8 +22,8 @@ android {
         applicationId = "dev.j4r1sg.dictado"
         minSdk = 26
         targetSdk = 36
-        versionCode = 107
-        versionName = "1.0.0-beta.8"
+        versionCode = 108
+        versionName = "1.0.0-beta.9"
         ndk {
             abiFilters += targetAbis
         }
@@ -121,6 +121,8 @@ dependencies {
     // WebViewAssetLoader + WebViewCompat.addWebMessageListener (the JS bridge).
     implementation("androidx.webkit:webkit:1.14.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
+    // Lector de QR (solo Java, sin Google Play): emparejar el micrófono con otra PC.
+    implementation("com.journeyapps:zxing-android-embedded:4.3.0")
 
     // JVM unit tests (app/src/test). org.json in android.jar is only a stub
     // on the JVM; the real library replaces it for the tests.

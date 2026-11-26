@@ -39,6 +39,8 @@ import androidx.webkit.WebViewAssetLoader
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import com.journeyapps.barcodescanner.ScanContract
+import com.journeyapps.barcodescanner.ScanOptions
 import dev.notune.transcribe.neo.Bridge
 import dev.notune.transcribe.neo.Discovery
 import dev.notune.transcribe.neo.NeoClient
@@ -82,6 +84,19 @@ class NeoActivity : AppCompatActivity() {
     private var webDestroyed = false
     private var pendingMic: Bridge.Request? = null
     private var pendingMicAt = 0L
+
+    // QR del micrófono: la página espera la respuesta de "scanQr" mientras la cámara está abierta
+    private var pendingScan: Bridge.Request? = null
+    private val scanLauncher = registerForActivityResult(ScanContract()) { result ->
+        val req = pendingScan ?: return@registerForActivityResult
+        pendingScan = null
+        val key = Bridge.micQr(result.contents)
+        when {
+            result.contents == null -> post(Bridge.error(req.id, "No se leyó ningún código."))
+            key == null -> post(Bridge.error(req.id, "Ese no es el código del micrófono. Escanea el QR de la página de dictado."))
+            else -> post(Bridge.ok(req.id, JSONObject().put("qr", key)))
+        }
+    }
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -251,6 +266,25 @@ class NeoActivity : AppCompatActivity() {
                 post(Bridge.ok(req.id, JSONObject()))
             }
             "deviceName" -> post(Bridge.ok(req.id, JSONObject().put("name", deviceName())))
+            "scanQr" -> scanQr(req)
+        }
+    }
+
+    /** Abre la cámara para leer el QR del micrófono (otra PC). La cámara la pide el lector la primera vez. */
+    private fun scanQr(req: Bridge.Request) {
+        micCancelQuiet()
+        pendingScan?.let { post(Bridge.error(it.id, "No se leyó ningún código.")) }
+        pendingScan = req
+        val opts = ScanOptions()
+            .setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+            .setPrompt("Apunta al código QR de la otra computadora")
+            .setBeepEnabled(false)
+            .setOrientationLocked(false)
+        try {
+            scanLauncher.launch(opts)
+        } catch (e: Exception) {
+            pendingScan = null
+            post(Bridge.error(req.id, "No se pudo abrir la cámara. Escribe el código de 4 números."))
         }
     }
 

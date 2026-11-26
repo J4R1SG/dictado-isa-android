@@ -16,6 +16,7 @@ object Bridge {
     val OPS = setOf(
         "discover", "connect", "login", "logout", "me", "changePassword", "api",
         "micStart", "micStop", "micCancel", "modelStatus", "importModel", "deviceName", "forget",
+        "scanQr",
     )
     val EVENTS = setOf("mic_level", "mic_status", "mic_text")
 
@@ -117,6 +118,20 @@ object Bridge {
         for (k in listOf("user", "name", "role", "doctor")) u.put(k, o.optString(k, ""))
         u.put("must_change", o.optBoolean("must_change", false))
         return u
+    }
+
+    // ---- QR del micrófono (otra PC de la clínica)
+
+    private val MIC_QR_RE = Regex("NEOMIC1:([A-Za-z0-9_-]{16,64})")
+
+    /**
+     * Texto leído del QR que muestra la página de dictado de otra PC: "NEOMIC1:<clave del emparejamiento>".
+     * Devuelve solo la clave (la página la manda a la PC principal por la conexión segura de siempre), o null si
+     * el QR es otra cosa (un enlace, un texto cualquiera): nunca se abre ni se manda lo que no sea esto.
+     */
+    fun micQr(text: Any?): String? {
+        if (text !is String || text.length > 100) return null
+        return MIC_QR_RE.matchEntire(text.trim())?.groupValues?.get(1)
     }
 
     // ---- discovery
